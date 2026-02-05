@@ -129,7 +129,15 @@ namespace CopyAsInsert.Updater
             for (int i = 0; i < args.Length - 1; i++)
             {
                 if (args[i] == argName)
-                    return args[i + 1];
+                {
+                    var value = args[i + 1];
+                    // Remove surrounding quotes if present
+                    if (!string.IsNullOrEmpty(value) && value.StartsWith("\"") && value.EndsWith("\""))
+                    {
+                        return value.Substring(1, value.Length - 2);
+                    }
+                    return value;
+                }
             }
             return null;
         }
