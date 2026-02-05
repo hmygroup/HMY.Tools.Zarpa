@@ -13,4 +13,10 @@
     <PackageReference Include="EPPlus" Version="7.1.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Group-3.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

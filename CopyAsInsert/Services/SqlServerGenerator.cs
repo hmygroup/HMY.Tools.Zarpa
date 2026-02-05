@@ -1,5 +1,6 @@
 using CopyAsInsert.Models;
 using System.Text;
+using System.Globalization;
 
 namespace CopyAsInsert.Services;
 
@@ -108,40 +109,37 @@ public class SqlServerGenerator
 
     /// <summary>
     /// Generate column definition SQL
+    /// Uses only basic types: INT, DECIMAL, MONEY, NVARCHAR
     /// </summary>
     private static string GenerateColumnDefinition(ColumnTypeInfo col)
     {
         var def = new StringBuilder();
         def.Append($"[{col.ColumnName}] ");
 
-        // Add SQL type
-        if (col.SqlType == "VARCHAR")
-        {
-            int length = col.MaxLength.HasValue && col.MaxLength > 0 ? col.MaxLength.Value : 255;
-            def.Append($"VARCHAR({length})");
-        }
-        else if (col.SqlType == "INT")
+        // Add SQL type - only basic types
+        if (col.SqlType == "INT")
         {
             if (col.IsPrimaryKey)
                 def.Append("INT IDENTITY(1,1) PRIMARY KEY");
             else
                 def.Append("INT");
         }
-        else if (col.SqlType == "FLOAT")
+        else if (col.SqlType == "DECIMAL")
         {
-            def.Append("FLOAT");
+            def.Append("DECIMAL(18,2)");
         }
-        else if (col.SqlType == "DATETIME2")
+        else if (col.SqlType == "MONEY")
         {
-            def.Append("DATETIME2(0)");
+            def.Append("MONEY");
         }
-        else if (col.SqlType == "BIT")
+        else // NVARCHAR or default
         {
-            def.Append("BIT");
-        }
-        else
-        {
-            def.Append("VARCHAR(MAX)");
+            int length = (col.MaxLength.HasValue && col.MaxLength > 0) ? col.MaxLength.Value : 255;
+            // Cap length at reasonable limit, use MAX for very long values
+            if (length > 4000)
+                def.Append("NVARCHAR(MAX)");
+            else
+                def.Append($"NVARCHAR({length})");
         }
 
         // Add NULL constraint
@@ -233,19 +231,23 @@ public class SqlServerGenerator
 
     /// <summary>
     /// Format a value for SQL based on its type
+    /// Only handles basic types: INT, DECIMAL, MONEY, NVARCHAR
     /// </summary>
     private static string FormatSqlValue(string value, string sqlType)
     {
         if (string.IsNullOrWhiteSpace(value))
             return "NULL";
 
+        // If the value is exactly "NULL" (case-insensitive), treat it as the NULL keyword
+        if (value.Equals("NULL", StringComparison.OrdinalIgnoreCase))
+            return "NULL";
+
         return sqlType switch
         {
             "INT" => int.TryParse(value, out var intVal) ? intVal.ToString() : "NULL",
-            "FLOAT" => double.TryParse(value, out var floatVal) ? floatVal.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL",
-            "DATETIME2" => DateTime.TryParse(value, out var dateVal) ? $"'{dateVal:yyyy-MM-dd HH:mm:ss}'" : "NULL",
-            "BIT" => FormatBoolValue(value),
-            _ => $"'{EscapeSqlString(value)}'"
+            "DECIMAL" => decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var decVal) ? decVal.ToString(CultureInfo.InvariantCulture) : "NULL",
+            "MONEY" => decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var moneyVal) ? moneyVal.ToString(CultureInfo.InvariantCulture) : "NULL",
+            _ => $"'{EscapeSqlString(value)}'"  // NVARCHAR or default
         };
     }
 

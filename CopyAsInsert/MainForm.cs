@@ -46,7 +46,9 @@ public partial class MainForm : Form
     {
         this.SuspendLayout();
 
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Group-3.ico");
         this.Text = "ZARPA";
+        this.Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
         this.Width = 500;
         this.Height = 400;
         this.StartPosition = FormStartPosition.CenterScreen;
@@ -114,9 +116,10 @@ public partial class MainForm : Form
         if (_trayIcon != null)
             return; // Already initialized
 
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Group-3.ico");
         _trayIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application,
             Visible = true,
             Text = "ZARPA - Alt+Shift+I"
         };

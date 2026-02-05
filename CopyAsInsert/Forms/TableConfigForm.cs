@@ -22,15 +22,17 @@ public partial class TableConfigForm : Form
     {
         this.SuspendLayout();
 
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Group-3.ico");
         // Form properties
         this.Text = "SQL Table Configuration";
+        this.Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
         this.Width = 420;
         this.Height = 310;
         this.StartPosition = FormStartPosition.CenterScreen;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
         this.MaximizeBox = false;
         this.MinimizeBox = false;
-        this.ShowIcon = false;
+        this.ShowIcon = true;
 
         // Table Name Label
         var lblTableName = new Label

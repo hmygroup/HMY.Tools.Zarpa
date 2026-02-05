@@ -21,15 +21,17 @@ public partial class SettingsForm : Form
     {
         this.SuspendLayout();
 
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Group-3.ico");
         // Form properties
         this.Text = "Settings";
+        this.Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
         this.Width = 400;
         this.Height = 300;
         this.StartPosition = FormStartPosition.CenterScreen;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
         this.MaximizeBox = false;
         this.MinimizeBox = false;
-        this.ShowIcon = false;
+        this.ShowIcon = true;
 
         // Default Schema Label
         var lblSchema = new Label

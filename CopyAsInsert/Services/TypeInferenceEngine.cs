@@ -35,11 +35,11 @@ public class TypeInferenceEngine
             var nonEmptyValue = values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
             column.SampleValue = nonEmptyValue ?? values.FirstOrDefault() ?? "";
 
-            // Check for NULL values
-            column.AllowNull = values.Any(v => string.IsNullOrWhiteSpace(v));
+            // All columns are nullable by default
+            column.AllowNull = true;
 
-            // Set max length for VARCHAR
-            if (inferredType == "VARCHAR")
+            // Set max length for NVARCHAR
+            if (inferredType == "NVARCHAR")
             {
                 column.MaxLength = values.Where(v => !string.IsNullOrWhiteSpace(v))
                     .Max(v => v.Length);
@@ -59,42 +59,32 @@ public class TypeInferenceEngine
 
     /// <summary>
     /// Infer the type of a column based on its values (lenient matching: 70% threshold)
-    /// Type precedence: INT → FLOAT → DATETIME2 → BOOL → VARCHAR
+    /// Only uses basic types: INT, DECIMAL, MONEY, NVARCHAR
+    /// If uncertain, defaults to NVARCHAR for robustness
+    /// Type precedence: INT → DECIMAL → NVARCHAR
     /// </summary>
     private static string InferColumnType(List<string> values)
     {
         if (values.Count == 0)
-            return "VARCHAR";
+            return "NVARCHAR";
 
         var nonEmptyValues = values.Where(v => !string.IsNullOrWhiteSpace(v)).ToList();
 
         if (nonEmptyValues.Count == 0)
-            return "VARCHAR";
+            return "NVARCHAR";
 
-        // Try INT
+        // Try INT - must be strict integers
         int intCount = nonEmptyValues.Count(v => int.TryParse(v, out _));
         if (IntPercentage(intCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
             return "INT";
 
-        // Try FLOAT
-        int floatCount = nonEmptyValues.Count(v => double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _));
-        if (PercentageMatch(floatCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
-            return "FLOAT";
+        // Try DECIMAL - includes floats, decimals
+        int decimalCount = nonEmptyValues.Count(v => decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _));
+        if (PercentageMatch(decimalCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
+            return "DECIMAL";
 
-        // Try DATETIME2
-        int dateCount = nonEmptyValues.Count(v => DateTime.TryParse(v, out _));
-        if (PercentageMatch(dateCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
-            return "DATETIME2";
-
-        // Try BOOL
-        int boolCount = nonEmptyValues.Count(v => v.Equals("TRUE", StringComparison.OrdinalIgnoreCase) || 
-                                                    v.Equals("FALSE", StringComparison.OrdinalIgnoreCase) ||
-                                                    v == "0" || v == "1");
-        if (PercentageMatch(boolCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
-            return "BIT";
-
-        // Default to VARCHAR
-        return "VARCHAR";
+        // Default to NVARCHAR - when in doubt, use text for robustness
+        return "NVARCHAR";
     }
 
     /// <summary>
@@ -113,11 +103,7 @@ public class TypeInferenceEngine
         int matchCount = sqlType switch
         {
             "INT" => nonEmptyValues.Count(v => int.TryParse(v, out _)),
-            "FLOAT" => nonEmptyValues.Count(v => double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _)),
-            "DATETIME2" => nonEmptyValues.Count(v => DateTime.TryParse(v, out _)),
-            "BIT" => nonEmptyValues.Count(v => v.Equals("TRUE", StringComparison.OrdinalIgnoreCase) || 
-                                                 v.Equals("FALSE", StringComparison.OrdinalIgnoreCase) ||
-                                                 v == "0" || v == "1"),
+            "DECIMAL" => nonEmptyValues.Count(v => decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _)),
             _ => nonEmptyValues.Count
         };
 

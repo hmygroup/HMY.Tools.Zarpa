@@ -16,15 +16,17 @@ public partial class HeaderCheckForm : Form
     {
         this.SuspendLayout();
 
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Group-3.ico");
         // Form properties
         this.Text = "Data Format";
+        this.Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
         this.Width = 350;
         this.Height = 150;
         this.StartPosition = FormStartPosition.CenterScreen;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
         this.MaximizeBox = false;
         this.MinimizeBox = false;
-        this.ShowIcon = false;
+        this.ShowIcon = true;
         this.TopMost = true;
         this.ControlBox = false;
 
