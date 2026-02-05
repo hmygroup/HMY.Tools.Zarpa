@@ -43,168 +43,201 @@ public class TableDataParser
     /// </summary>
     public static DataTableSchema ParseClipboardText(string clipboardText, bool hasHeaders = true)
     {
-        if (string.IsNullOrWhiteSpace(clipboardText))
-            throw new InvalidOperationException("Clipboard is empty");
-
-        var lines = clipboardText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-
-        if (lines.Length < 1)
-            throw new InvalidOperationException("No data found in clipboard");
-
-        // Allow single row if no headers
-        if (hasHeaders && lines.Length < 1)
-            throw new InvalidOperationException("At least one header row required");
-
-        // Detect delimiter (tab preference, fallback to comma, fallback to no delimiter)
-        char delimiter = '\t';
-        if (!lines[0].Contains('\t'))
+        try
         {
-            delimiter = ',';
-            if (!lines[0].Contains(','))
+            if (string.IsNullOrWhiteSpace(clipboardText))
+                throw new InvalidOperationException("Clipboard is empty");
+
+            var lines = clipboardText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+
+            if (lines.Length < 1)
+                throw new InvalidOperationException("No data found in clipboard");
+
+            // Allow single row if no headers
+            if (hasHeaders && lines.Length < 1)
+                throw new InvalidOperationException("At least one header row required");
+
+            // Detect delimiter (tab preference, fallback to comma, fallback to no delimiter)
+            char delimiter = '\t';
+            if (!lines[0].Contains('\t'))
             {
-                delimiter = '\0'; // No delimiter found - treat as single column
+                delimiter = ',';
+                if (!lines[0].Contains(','))
+                {
+                    delimiter = '\0'; // No delimiter found - treat as single column
+                }
             }
-        }
 
-        var schema = new DataTableSchema
-        {
-            OriginalTableName = "ParsedTable",
-            DataSource = delimiter == '\t' ? "ClipboardTSV" : (delimiter == ',' ? "ClipboardCSV" : "ClipboardSingle")
-        };
+            Logger.LogDebug($"ParseClipboardText: detected delimiter={delimiter}, lines={lines.Length}, hasHeaders={hasHeaders}");
 
-        string[] headers;
-        int dataStartIndex;
-
-        if (hasHeaders)
-        {
-            // First row is headers
-            headers = delimiter == '\0' 
-                ? new[] { NormalizeColumnName(lines[0].Trim()) }
-                : lines[0].Split(delimiter).Select(h => NormalizeColumnName(h.Trim())).ToArray();
-            dataStartIndex = 1;
-
-            if (headers.Length == 0)
-                throw new InvalidOperationException("No columns found in header");
-        }
-        else
-        {
-            // No headers - generate generic column names based on first row
-            var firstRow = delimiter == '\0'
-                ? new[] { lines[0].Trim() }
-                : lines[0].Split(delimiter);
-            headers = new string[firstRow.Length];
-            for (int i = 0; i < firstRow.Length; i++)
+            var schema = new DataTableSchema
             {
-                headers[i] = $"Col{i + 1}";
-            }
-            dataStartIndex = 0; // All rows are data
-        }
+                OriginalTableName = "ParsedTable",
+                DataSource = delimiter == '\t' ? "ClipboardTSV" : (delimiter == ',' ? "ClipboardCSV" : "ClipboardSingle")
+            };
 
-        // Add column headers
-        foreach (var header in headers)
-        {
-            schema.Columns.Add(new ColumnTypeInfo 
-            { 
-                ColumnName = header,
-                SqlType = "VARCHAR",
-                AllowNull = true
-            });
-        }
+            string[] headers;
+            int dataStartIndex;
 
-        // Parse data rows
-        for (int i = dataStartIndex; i < lines.Length; i++)
-        {
-            string[] values;
-            if (delimiter == '\0')
+            if (hasHeaders)
             {
-                // No delimiter - single column
-                values = new[] { lines[i].Trim() };
+                // First row is headers
+                headers = delimiter == '\0' 
+                    ? new[] { NormalizeColumnName(lines[0].Trim()) }
+                    : lines[0].Split(delimiter).Select(h => NormalizeColumnName(h.Trim())).ToArray();
+                dataStartIndex = 1;
+
+                if (headers.Length == 0)
+                    throw new InvalidOperationException("No columns found in header");
             }
             else
             {
-                values = lines[i].Split(delimiter);
+                // No headers - generate generic column names based on first row
+                var firstRow = delimiter == '\0'
+                    ? new[] { lines[0].Trim() }
+                    : lines[0].Split(delimiter);
+                headers = new string[firstRow.Length];
+                for (int i = 0; i < firstRow.Length; i++)
+                {
+                    headers[i] = $"Col{i + 1}";
+                }
+                dataStartIndex = 0; // All rows are data
             }
-            
-            // Pad with empty strings if columns mismatch
-            var paddedValues = new List<string>();
-            for (int j = 0; j < headers.Length; j++)
+
+            // Add column headers
+            foreach (var header in headers)
             {
-                paddedValues.Add(j < values.Length ? values[j].Trim() : string.Empty);
+                schema.Columns.Add(new ColumnTypeInfo 
+                { 
+                    ColumnName = header,
+                    SqlType = "VARCHAR",
+                    AllowNull = true
+                });
             }
 
-            schema.DataRows.Add(paddedValues.ToArray());
-        }
+            // Parse data rows
+            for (int i = dataStartIndex; i < lines.Length; i++)
+            {
+                string[] values;
+                if (delimiter == '\0')
+                {
+                    // No delimiter - single column
+                    values = new[] { lines[i].Trim() };
+                }
+                else
+                {
+                    values = lines[i].Split(delimiter);
+                }
+                
+                // Pad with empty strings if columns mismatch
+                var paddedValues = new List<string>();
+                for (int j = 0; j < headers.Length; j++)
+                {
+                    paddedValues.Add(j < values.Length ? values[j].Trim() : string.Empty);
+                }
 
-        return schema;
+                schema.DataRows.Add(paddedValues.ToArray());
+            }
+
+            Logger.LogInfo($"ParseClipboardText completed: {headers.Length} columns, {schema.DataRows.Count} data rows");
+            return schema;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("ParseClipboardText failed", ex);
+            throw;
+        }
     }
 
     /// <summary>
-    /// Parse an Excel file (.xlsx)
+    /// Parse an Excel file (.xlsx), skipping empty and hidden rows
     /// </summary>
     public static DataTableSchema ParseExcelFile(string filePath)
     {
-        if (!File.Exists(filePath))
-            throw new FileNotFoundException($"File not found: {filePath}");
-
-        if (!filePath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Only .xlsx files are supported");
-
-        var workbook = new XLWorkbook(filePath);
-        
-        var worksheet = workbook.Worksheets.FirstOrDefault();
-        if (worksheet == null)
-            throw new InvalidOperationException("No worksheets found in Excel file");
-
-        var usedRange = worksheet.RangeUsed();
-        if (usedRange == null)
-            throw new InvalidOperationException("No data found in worksheet");
-
-        var schema = new DataTableSchema
+        try
         {
-            OriginalTableName = Path.GetFileNameWithoutExtension(filePath),
-            DataSource = "ExcelFile"
-        };
+            Logger.LogDebug($"ParseExcelFile started: {filePath}");
 
-        var rows = usedRange.Rows().ToList();
+            if (!File.Exists(filePath))
+                throw new FileNotFoundException($"File not found: {filePath}");
 
-        if (rows.Count < 2)
-            throw new InvalidOperationException("At least one header row and one data row required");
+            if (!filePath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Only .xlsx files are supported");
 
-        // Parse headers
-        var headerRow = rows[0];
-        var headers = new List<string>();
-        foreach (var cell in headerRow.Cells())
-        {
-            var headerName = cell.Value?.ToString()?.Trim() ?? "";
-            headers.Add(NormalizeColumnName(headerName));
-        }
+            var workbook = new XLWorkbook(filePath);
+            
+            var worksheet = workbook.Worksheets.FirstOrDefault();
+            if (worksheet == null)
+                throw new InvalidOperationException("No worksheets found in Excel file");
 
-        // Add column info
-        foreach (var header in headers)
-        {
-            schema.Columns.Add(new ColumnTypeInfo
+            var usedRange = worksheet.RangeUsed();
+            if (usedRange == null)
+                throw new InvalidOperationException("No data found in worksheet");
+
+            var schema = new DataTableSchema
             {
-                ColumnName = header,
-                SqlType = "VARCHAR",
-                AllowNull = true
-            });
-        }
+                OriginalTableName = Path.GetFileNameWithoutExtension(filePath),
+                DataSource = "ExcelFile"
+            };
 
-        // Parse data rows
-        for (int i = 1; i < rows.Count; i++)
-        {
-            var dataRow = rows[i];
-            var values = new List<string>();
+            var rows = usedRange.Rows().ToList();
 
-            foreach (var cell in dataRow.Cells().Take(headers.Count))
+            if (rows.Count < 2)
+                throw new InvalidOperationException("At least one header row and one data row required");
+
+            // Parse headers (first row)
+            var headerRow = rows[0];
+            var headers = new List<string>();
+            foreach (var cell in headerRow.Cells())
             {
-                values.Add(cell.Value?.ToString() ?? string.Empty);
+                var headerName = cell.Value?.ToString()?.Trim() ?? "";
+                headers.Add(NormalizeColumnName(headerName));
             }
 
-            schema.DataRows.Add(values.ToArray());
-        }
+            Logger.LogDebug($"Excel headers parsed: {headers.Count} columns");
 
-        return schema;
+            // Add column info
+            foreach (var header in headers)
+            {
+                schema.Columns.Add(new ColumnTypeInfo
+                {
+                    ColumnName = header,
+                    SqlType = "VARCHAR",
+                    AllowNull = true
+                });
+            }
+
+            // Parse data rows - skip first header row
+            for (int i = 1; i < rows.Count; i++)
+            {
+                var dataRow = rows[i];
+                var values = new List<string>();
+
+                // Skip empty rows
+                bool rowIsEmpty = true;
+                foreach (var cell in dataRow.Cells().Take(headers.Count))
+                {
+                    var cellValue = cell.Value?.ToString() ?? string.Empty;
+                    values.Add(cellValue);
+                    if (!string.IsNullOrWhiteSpace(cellValue))
+                        rowIsEmpty = false;
+                }
+
+                // Only add non-empty rows
+                if (!rowIsEmpty)
+                {
+                    schema.DataRows.Add(values.ToArray());
+                }
+            }
+
+            Logger.LogInfo($"ParseExcelFile completed: {headers.Count} columns, {schema.DataRows.Count} data rows (non-empty)");
+            return schema;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"ParseExcelFile failed for {filePath}", ex);
+            throw;
+        }
     }
 
     /// <summary>

@@ -14,7 +14,7 @@ public partial class TableConfigForm : Form
     {
         InitializeComponent();
         SchemaName = "dbo";
-        IsTemporalTable = true;
+        IsTemporalTable = false;
         IsTemporaryTable = false;
     }
 
@@ -84,7 +84,7 @@ public partial class TableConfigForm : Form
             Top = 100,
             Width = 350,
             Height = 20,
-            Checked = true
+            Checked = false
         };
 
         // Temporary Table Checkbox

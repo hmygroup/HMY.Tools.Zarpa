@@ -1,6 +1,5 @@
 using CopyAsInsert.Models;
 using System.Text;
-using System.Globalization;
 
 namespace CopyAsInsert.Services;
 
@@ -108,25 +107,17 @@ public class SqlServerGenerator
     }
 
     /// <summary>
-    /// Generate column definition SQL
-    /// Uses only basic types: INT, DECIMAL, MONEY, NVARCHAR
+    /// Generate column definition SQL - supports INT, MONEY, and NVARCHAR
     /// </summary>
     private static string GenerateColumnDefinition(ColumnTypeInfo col)
     {
         var def = new StringBuilder();
         def.Append($"[{col.ColumnName}] ");
 
-        // Add SQL type - only basic types
+        // Add SQL type - INT, MONEY, or NVARCHAR
         if (col.SqlType == "INT")
         {
-            if (col.IsPrimaryKey)
-                def.Append("INT IDENTITY(1,1) PRIMARY KEY");
-            else
-                def.Append("INT");
-        }
-        else if (col.SqlType == "DECIMAL")
-        {
-            def.Append("DECIMAL(18,2)");
+            def.Append("INT");
         }
         else if (col.SqlType == "MONEY")
         {
@@ -143,53 +134,43 @@ public class SqlServerGenerator
         }
 
         // Add NULL constraint
-        if (!col.AllowNull && !col.IsPrimaryKey)
+        if (!col.AllowNull)
             def.Append(" NOT NULL");
-        else if (col.AllowNull && !col.IsPrimaryKey)
+        else
             def.Append(" NULL");
 
         return def.ToString();
     }
 
     /// <summary>
-    /// Generate INSERT INTO statements (batched in groups of 1000 to avoid SQL Server limits)
+    /// Generate INSERT INTO statements (batched in groups of 1000)
+    /// Includes ALL columns - no exclusions
     /// </summary>
     private static string GenerateInsertStatements(DataTableSchema schema, string tableName, string schema_name, bool isTemporaryTable = false)
     {
         var sb = new StringBuilder();
 
-        string fullTableName;
-        if (isTemporaryTable)
-        {
-            fullTableName = $"[#{tableName}_Temporal]";
-        }
-        else
-        {
-            fullTableName = $"[{schema_name}].[{tableName}_Temporal]";
-        }
+        // Simple table name
+        string fullTableName = $"[{schema_name}].[{tableName}]";
         
-        // Build column list (exclude temporal columns and IDENTITY PK if applicable)
+        // Build column list - ALL columns, no skipping
         var insertColumns = new List<string>();
         for (int i = 0; i < schema.Columns.Count; i++)
         {
-            var col = schema.Columns[i];
-            // Skip IDENTITY columns (they auto-generate)
-            if (col.IsPrimaryKey && col.SqlType == "INT")
-                continue;
-            insertColumns.Add($"[{col.ColumnName}]");
+            insertColumns.Add($"[{schema.Columns[i].ColumnName}]");
         }
 
         var columnList = string.Join(", ", insertColumns);
+        Logger.LogDebug($"Insert columns ({insertColumns.Count}): {columnList}");
 
-        const int BATCH_SIZE = 1000; // SQL Server limit for VALUES clause
+        const int BATCH_SIZE = 1000;
         int totalRows = schema.DataRows.Count;
-        int batchCount = (totalRows + BATCH_SIZE - 1) / BATCH_SIZE; // Ceiling division
+        int batchCount = (totalRows + BATCH_SIZE - 1) / BATCH_SIZE;
 
         for (int batchIndex = 0; batchIndex < batchCount; batchIndex++)
         {
             int batchStart = batchIndex * BATCH_SIZE;
             int batchEnd = Math.Min(batchStart + BATCH_SIZE, totalRows);
-            int batchRowCount = batchEnd - batchStart;
 
             // Start new INSERT for this batch
             sb.AppendLine($"INSERT INTO {fullTableName} ({columnList})");
@@ -202,15 +183,11 @@ public class SqlServerGenerator
                 var row = schema.DataRows[rowIndex];
                 var values = new List<string>();
 
+                // Add ALL column values in order
                 for (int colIndex = 0; colIndex < schema.Columns.Count; colIndex++)
                 {
                     var col = schema.Columns[colIndex];
                     var value = row[colIndex];
-
-                    // Skip IDENTITY columns
-                    if (col.IsPrimaryKey && col.SqlType == "INT")
-                        continue;
-
                     values.Add(FormatSqlValue(value, col.SqlType));
                 }
 
@@ -230,8 +207,7 @@ public class SqlServerGenerator
     }
 
     /// <summary>
-    /// Format a value for SQL based on its type
-    /// Only handles basic types: INT, DECIMAL, MONEY, NVARCHAR
+    /// Format a value for SQL based on its type - supports INT, MONEY, NVARCHAR
     /// </summary>
     private static string FormatSqlValue(string value, string sqlType)
     {
@@ -245,30 +221,9 @@ public class SqlServerGenerator
         return sqlType switch
         {
             "INT" => int.TryParse(value, out var intVal) ? intVal.ToString() : "NULL",
-            "DECIMAL" => decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var decVal) ? decVal.ToString(CultureInfo.InvariantCulture) : "NULL",
-            "MONEY" => decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var moneyVal) ? moneyVal.ToString(CultureInfo.InvariantCulture) : "NULL",
+            "MONEY" => decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var moneyVal) ? moneyVal.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL",
             _ => $"'{EscapeSqlString(value)}'"  // NVARCHAR or default
         };
-    }
-
-    /// <summary>
-    /// Format boolean value for SQL
-    /// </summary>
-    private static string FormatBoolValue(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return "NULL";
-
-        bool isBool = bool.TryParse(value, out var boolVal);
-        if (isBool)
-            return boolVal ? "1" : "0";
-
-        if (value == "1")
-            return "1";
-        if (value == "0")
-            return "0";
-
-        return "NULL";
     }
 
     /// <summary>

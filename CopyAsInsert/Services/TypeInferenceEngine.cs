@@ -19,8 +19,6 @@ public class TypeInferenceEngine
         if (schema.Columns.Count == 0 || schema.DataRows.Count == 0)
             return;
 
-        var pkIndex = -1;
-
         for (int colIndex = 0; colIndex < schema.Columns.Count; colIndex++)
         {
             var column = schema.Columns[colIndex];
@@ -41,27 +39,19 @@ public class TypeInferenceEngine
             // Set max length for NVARCHAR
             if (inferredType == "NVARCHAR")
             {
-                column.MaxLength = values.Where(v => !string.IsNullOrWhiteSpace(v))
-                    .Max(v => v.Length);
-            }
-
-            // Auto-detect primary key: first INT column or column with "ID" in name
-            if (pkIndex == -1 && (inferredType == "INT" || column.ColumnName.Contains("ID", StringComparison.OrdinalIgnoreCase)))
-            {
-                pkIndex = colIndex;
-                column.IsPrimaryKey = true;
-                column.AllowNull = false;
+                var nonEmptyValueLengths = values.Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Select(v => v.Length)
+                    .ToList();
+                
+                column.MaxLength = nonEmptyValueLengths.Count > 0 ? nonEmptyValueLengths.Max() : 0;
             }
         }
-
-        schema.PrimaryKeyColumnIndex = pkIndex;
     }
 
     /// <summary>
-    /// Infer the type of a column based on its values (lenient matching: 70% threshold)
-    /// Only uses basic types: INT, DECIMAL, MONEY, NVARCHAR
-    /// If uncertain, defaults to NVARCHAR for robustness
-    /// Type precedence: INT → DECIMAL → NVARCHAR
+    /// Infer the type of a column based on its values
+    /// Supports: INT, MONEY (decimal with 2-4 decimals), NVARCHAR
+    /// If any value is "0" or has leading zeros, treat as NVARCHAR
     /// </summary>
     private static string InferColumnType(List<string> values)
     {
@@ -73,15 +63,22 @@ public class TypeInferenceEngine
         if (nonEmptyValues.Count == 0)
             return "NVARCHAR";
 
-        // Try INT - must be strict integers
+        // If any value has leading zeros (like "0001", "0010") or is exactly "0", treat as NVARCHAR
+        if (nonEmptyValues.Any(v => 
+            (v.StartsWith("0") && v.Length > 1) || 
+            v == "0"))
+            return "NVARCHAR";
+
+        // Try INT - must be strict integers (70% threshold)
         int intCount = nonEmptyValues.Count(v => int.TryParse(v, out _));
         if (IntPercentage(intCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
             return "INT";
 
-        // Try DECIMAL - includes floats, decimals
-        int decimalCount = nonEmptyValues.Count(v => decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _));
-        if (PercentageMatch(decimalCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
-            return "DECIMAL";
+        // Try MONEY - decimal values with reasonable precision
+        int moneyCount = nonEmptyValues.Count(v => 
+            decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _));
+        if (PercentageMatch(moneyCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
+            return "MONEY";
 
         // Default to NVARCHAR - when in doubt, use text for robustness
         return "NVARCHAR";
@@ -103,7 +100,7 @@ public class TypeInferenceEngine
         int matchCount = sqlType switch
         {
             "INT" => nonEmptyValues.Count(v => int.TryParse(v, out _)),
-            "DECIMAL" => nonEmptyValues.Count(v => decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _)),
+            "MONEY" => nonEmptyValues.Count(v => decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _)),
             _ => nonEmptyValues.Count
         };
 

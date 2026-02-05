@@ -23,6 +23,9 @@ public partial class MainForm : Form
     public MainForm()
     {
         InitializeComponent();
+        // Initialize logger early
+        Logger.Initialize();
+        Logger.LogInfo("MainForm constructor called");
     }
 
     protected override void OnLoad(EventArgs e)
@@ -164,12 +167,15 @@ public partial class MainForm : Form
             _clipboardInterceptor.InitializeHotKey(this.Handle);
             _hotkeyRegistered = true;
             
+            Logger.LogInfo("Hotkey Alt+Shift+I registered successfully");
+            
             // Show confirmation
             if (_trayIcon != null)
                 _trayIcon.ShowBalloonTip(2000, "Ready", "Alt+Shift+I registered successfully", ToolTipIcon.Info);
         }
         catch (Exception ex)
         {
+            Logger.LogError("Failed to register hotkey", ex);
             if (_trayIcon != null)
                 _trayIcon.ShowBalloonTip(3000, "Error", $"Hotkey registration failed: {ex.Message}", ToolTipIcon.Error);
         }
@@ -190,37 +196,51 @@ public partial class MainForm : Form
     {
         try
         {
+            Logger.LogDebug("ProcessClipboard started");
             var clipboardText = ClipboardInterceptor.GetClipboardText();
 
             if (string.IsNullOrEmpty(clipboardText) || !ClipboardInterceptor.IsClipboardTabularData())
             {
+                Logger.LogInfo("Clipboard does not contain tabular data");
                 _trayIcon?.ShowBalloonTip(2000, "No Table Data", "Clipboard does not contain tabular data (TSV/CSV)", ToolTipIcon.Info);
                 return;
             }
+
+            Logger.LogDebug("Clipboard contains tabular data, showing header check form");
 
             // Ask user if data has headers
             var headerCheckForm = new HeaderCheckForm();
             var headerCheckResult = headerCheckForm.ShowDialog();
             if (headerCheckResult != DialogResult.Yes && headerCheckResult != DialogResult.No)
+            {
+                Logger.LogDebug("User cancelled header check form");
                 return; // User cancelled
+            }
 
             bool hasHeaders = headerCheckForm.HasHeaders;
+            Logger.LogInfo($"Header check result: hasHeaders={hasHeaders}");
 
             // Parse clipboard data with header check
             var schema = TableDataParser.ParseClipboardText(clipboardText, hasHeaders);
+            Logger.LogInfo($"Clipboard parsed successfully: {schema.Columns.Count} columns, {schema.DataRows.Count} rows");
 
             // Infer column types
             TypeInferenceEngine.InferColumnTypes(schema);
+            Logger.LogDebug("Column types inferred");
 
             // Show config dialog
             var configForm = new TableConfigForm();
             if (configForm.ShowDialog() == DialogResult.OK)
             {
+                Logger.LogInfo($"Config form accepted: TableName={configForm.TableName}, Schema={configForm.SchemaName}");
+
                 // Generate SQL
                 var result = SqlServerGenerator.GenerateSql(schema, configForm.TableName, configForm.SchemaName, configForm.IsTemporalTable, configForm.IsTemporaryTable);
 
                 if (result.Success)
                 {
+                    Logger.LogInfo($"SQL generated successfully: {result.Summary}");
+
                     // Copy SQL to clipboard
                     ClipboardInterceptor.SetClipboardText(result.GeneratedSql);
 
@@ -233,12 +253,18 @@ public partial class MainForm : Form
                 }
                 else
                 {
+                    Logger.LogError($"SQL generation failed: {result.ErrorMessage}");
                     _trayIcon?.ShowBalloonTip(3000, "Error", $"Failed to generate SQL: {result.ErrorMessage}", ToolTipIcon.Error);
                 }
+            }
+            else
+            {
+                Logger.LogDebug("User cancelled config form");
             }
         }
         catch (Exception ex)
         {
+            Logger.LogError("Error processing clipboard", ex);
             _trayIcon?.ShowBalloonTip(3000, "Error", $"Error processing clipboard: {ex.Message}", ToolTipIcon.Error);
         }
     }
@@ -379,10 +405,12 @@ public partial class MainForm : Form
     {
         if (disposing)
         {
+            Logger.LogInfo("MainForm disposing");
             _clipboardInterceptor?.Dispose();
             _trayIcon?.Dispose();
             _contextMenu?.Dispose();
             _updateChecker = null;
+            Logger.CloseAndFlush();
         }
         base.Dispose(disposing);
     }
