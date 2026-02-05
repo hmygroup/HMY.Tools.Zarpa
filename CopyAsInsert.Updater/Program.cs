@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Net.Http;
 using System.Threading.Tasks;
 
@@ -31,26 +32,56 @@ namespace CopyAsInsert.Updater
                 Log($"Download URL: {url}");
                 Log($"App path: {appPath}");
 
-                // Download the new executable
-                var tempFile = Path.Combine(Path.GetTempPath(), $"CopyAsInsert-{version}.exe");
-                if (!await DownloadFileAsync(url, tempFile))
+                // Download the new executable (as zip file)
+                var tempZipFile = Path.Combine(Path.GetTempPath(), $"CopyAsInsert-{version}.zip");
+                if (!await DownloadFileAsync(url, tempZipFile))
                 {
                     Log("ERROR: Failed to download update");
                     return;
                 }
 
-                Log($"Downloaded successfully to: {tempFile}");
+                Log($"Downloaded successfully to: {tempZipFile}");
+
+                // Extract the zip file to get the exe
+                var tempExtractDir = Path.Combine(Path.GetTempPath(), $"CopyAsInsert-{version}-extract");
+                if (!ExtractZipFile(tempZipFile, tempExtractDir))
+                {
+                    Log("ERROR: Failed to extract zip file");
+                    return;
+                }
+
+                // Find the exe in the extracted folder (should be in CopyAsInsert/ subfolder)
+                var extractedExePath = Path.Combine(tempExtractDir, "CopyAsInsert", "CopyAsInsert.exe");
+                if (!File.Exists(extractedExePath))
+                {
+                    // Try without subfolder
+                    extractedExePath = Path.Combine(tempExtractDir, "CopyAsInsert.exe");
+                    if (!File.Exists(extractedExePath))
+                    {
+                        Log($"ERROR: CopyAsInsert.exe not found in extracted archive");
+                        return;
+                    }
+                }
+
+                Log($"Found exe in extracted archive: {extractedExePath}");
 
                 // Stage the new exe
                 var stagedFile = Path.Combine(appPath, "CopyAsInsert.exe.new");
                 try
                 {
-                    File.Copy(tempFile, stagedFile, overwrite: true);
+                    File.Copy(extractedExePath, stagedFile, overwrite: true);
                     Log($"Staged update to: {stagedFile}");
 
-                    // Clean up temp file
-                    try { File.Delete(tempFile); }
-                    catch { /* Ignore */ }
+                    // Clean up temp files
+                    try 
+                    { 
+                        File.Delete(tempZipFile);
+                        if (Directory.Exists(tempExtractDir))
+                        {
+                            Directory.Delete(tempExtractDir, recursive: true);
+                        }
+                    }
+                    catch { /* Ignore cleanup errors */ }
                 }
                 catch (Exception ex)
                 {
@@ -121,8 +152,8 @@ namespace CopyAsInsert.Updater
                         return false;
                     }
 
-                    var totalBytes = response.Content.Headers.ContentLength ?? -1;
-                    Log($"File size: {totalBytes} bytes");
+                    var totalBytes = response.Content.Headers.ContentLength ?? -1L;
+                    Log($"File size: {totalBytes} bytes ({(double)totalBytes / 1024 / 1024:F1} MB)");
 
                     using (var contentStream = await response.Content.ReadAsStreamAsync())
                     using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, useAsync: true))
@@ -151,6 +182,50 @@ namespace CopyAsInsert.Updater
             catch (Exception ex)
             {
                 Log($"Download error: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static bool ExtractZipFile(string zipPath, string extractPath)
+        {
+            try
+            {
+                if (!File.Exists(zipPath))
+                {
+                    Log($"Zip file not found: {zipPath}");
+                    return false;
+                }
+
+                Log($"Extracting zip to: {extractPath}");
+                Directory.CreateDirectory(extractPath);
+
+                using (ZipArchive archive = ZipFile.OpenRead(zipPath))
+                {
+                    foreach (ZipArchiveEntry entry in archive.Entries)
+                    {
+                        string destinationPath = Path.Combine(extractPath, entry.FullName);
+                        
+                        // Create directories if needed
+                        string? destinationDir = Path.GetDirectoryName(destinationPath);
+                        if (destinationDir != null)
+                        {
+                            Directory.CreateDirectory(destinationDir);
+                        }
+
+                        // Extract file if not a directory
+                        if (!entry.FullName.EndsWith("/"))
+                        {
+                            entry.ExtractToFile(destinationPath, overwrite: true);
+                        }
+                    }
+                }
+
+                Log("Zip extraction completed successfully");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log($"Zip extraction error: {ex.Message}");
                 return false;
             }
         }

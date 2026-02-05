@@ -140,7 +140,7 @@ namespace CopyAsInsert.Services
                             };
                         }
 
-                        // Update is available - find the exe asset
+                        // Update is available - find the zip asset
                         var assets = root.GetProperty("assets");
                         Log($"Found {assets.GetArrayLength()} assets");
 
@@ -150,10 +150,11 @@ namespace CopyAsInsert.Services
                             var assetName = asset.GetProperty("name").GetString() ?? "";
                             Log($"Checking asset: {assetName}");
 
-                            if (assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                            // Look for the compressed release file (CopyAsInsert-v*.zip)
+                            if (assetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                             {
                                 downloadUrl = asset.GetProperty("browser_download_url").GetString();
-                                Log($"Found EXE asset download URL: {downloadUrl}");
+                                Log($"Found ZIP asset download URL: {downloadUrl}");
                                 break;
                             }
                         }
