@@ -123,12 +123,60 @@ CopyAsInsert/
 # Debug build
 dotnet build
 
-# Release build
-dotnet publish -c Release -o ./publish
+# Release build (self-contained, single file)
+dotnet publish -p:PublishProfile=Portable -c Release
 
-# Run from release
-./publish/CopyAsInsert.exe
+# Output: CopyAsInsert/bin/Release/net8.0-windows/publish/CopyAsInsert.exe
 ```
+
+### Continuous Integration & Releases
+
+The project uses **GitHub Actions** for automatic builds and releases:
+
+#### How It Works
+1. **Automatic Trigger**: Every push to the `main` branch automatically:
+   - Builds the project
+   - Publishes the portable executable
+   - Creates a GitHub release
+   - Uploads the `.exe` as a release asset
+
+2. **Version Management**:
+   - Version is read from `CopyAsInsert.csproj` (`<Version>` tag)
+   - Release tag is auto-generated from version (v1.0.0, v1.0.1, etc.)
+   - GitHub releases page is updated with the new executable
+
+3. **Release Assets**:
+   - `CopyAsInsert-v1.0.0.exe` - The portable executable
+   - `Group-3.ico` - Application icon
+
+#### To Release a New Version
+1. Update the version in [CopyAsInsert/CopyAsInsert.csproj](CopyAsInsert/CopyAsInsert.csproj):
+   ```xml
+   <Version>1.1.0</Version>
+   ```
+2. Push to main branch
+3. GitHub Actions automatically:
+   - Builds and publishes
+   - Creates release v1.1.0
+   - Uploads (`CopyAsInsert-v1.1.0.exe`)
+4. Users can download from [**GitHub Releases**](https://github.com/hmygroup/HMY.Tools.Zarpa/releases)
+
+#### Update Notifications
+- The app checks for new versions on startup
+- Users see a balloon notification if an update is available
+- Users can manually check via tray menu: **Check for Update**
+- Clicking opens the GitHub releases page to download the new version
+
+#### Applying Updates
+```bash
+# Run the update script with the new executable
+UpdateCopyAsInsert.bat "C:\Downloads\CopyAsInsert-v1.1.0.exe"
+```
+The script will:
+- Find your existing installation
+- Create a backup
+- Replace the executable
+- Restore backup if anything fails (safe rollback)
 
 ### Future Enhancements
 

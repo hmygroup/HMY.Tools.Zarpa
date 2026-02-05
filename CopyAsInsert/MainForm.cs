@@ -12,6 +12,7 @@ public partial class MainForm : Form
     private NotifyIcon? _trayIcon;
     private ContextMenuStrip? _contextMenu;
     private ClipboardInterceptor? _clipboardInterceptor;
+    private UpdateChecker? _updateChecker;
     private readonly List<ConversionResult> _conversionHistory = new();
     private const int MAX_HISTORY = 10;
 
@@ -31,6 +32,8 @@ public partial class MainForm : Form
         SetupTrayIcon();
         // Register hotkey after form is fully created and has window handle
         SetupHotkey();
+        // Check for updates asynchronously
+        CheckForUpdatesAsync();
         // Now hide the form (it stays in message loop but invisible)
         this.WindowState = FormWindowState.Minimized;
         this.Hide();
@@ -129,12 +132,15 @@ public partial class MainForm : Form
         var exitItem = new ToolStripMenuItem("Exit", null, (s, e) => Application.Exit());
         var settingsItem = new ToolStripMenuItem("Settings", null, (s, e) => ShowSettings());
         var historyItem = new ToolStripMenuItem("View History", null, (s, e) => ShowHistory());
+        var updateItem = new ToolStripMenuItem("Check for Update", null, (s, e) => CheckForUpdateManually());
         var restoreItem = new ToolStripMenuItem("Show", null, (s, e) => ShowMainWindow());
 
         _contextMenu.Items.Add(restoreItem);
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(settingsItem);
         _contextMenu.Items.Add(historyItem);
+        _contextMenu.Items.Add(new ToolStripSeparator());
+        _contextMenu.Items.Add(updateItem);
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(exitItem);
 
@@ -286,6 +292,87 @@ public partial class MainForm : Form
         MessageBox.Show(historyText, "Conversion History", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
+    private async void CheckForUpdatesAsync()
+    {
+        try
+        {
+            _updateChecker = new UpdateChecker();
+            var result = await _updateChecker.CheckForUpdatesAsync();
+
+            if (result.IsUpdateAvailable)
+            {
+                // Show notification asynchronously (on UI thread)
+                this.Invoke(() =>
+                {
+                    _trayIcon?.ShowBalloonTip(5000, "Update Available",
+                        $"CopyAsInsert {result.AvailableVersion} is available.\nClick 'Check for Update' to download.",
+                        ToolTipIcon.Info);
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            // Silently fail - don't bother user with update check errors
+            System.Diagnostics.Debug.WriteLine($"Update check failed: {ex.Message}");
+        }
+    }
+
+    private async void CheckForUpdateManually()
+    {
+        try
+        {
+            _updateChecker ??= new UpdateChecker();
+            var result = await _updateChecker.CheckForUpdatesAsync();
+
+            if (result.IsUpdateAvailable)
+            {
+                var message = $"Update Available!\n\n" +
+                    $"Current Version: {result.CurrentVersion}\n" +
+                    $"Latest Version: {result.AvailableVersion}\n\n" +
+                    $"Would you like to download the update?";
+
+                var dialogResult = MessageBox.Show(message, "Update Available",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+
+                if (dialogResult == DialogResult.Yes)
+                {
+                    // Open the download URL or GitHub releases page
+                    var downloadUrl = result.DownloadUrl ?? "https://github.com/hmygroup/HMY.Tools.Zarpa/releases";
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = downloadUrl,
+                        UseShellExecute = true
+                    });
+
+                    // Show instructions
+                    MessageBox.Show(
+                        "After downloading:\n\n" +
+                        "1. Run UpdateCopyAsInsert.bat\n" +
+                        "2. Select the downloaded CopyAsInsert.exe\n\n" +
+                        "The script will handle the update automatically.",
+                        "Update Instructions",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+            else if (string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                MessageBox.Show($"You are using the latest version ({result.CurrentVersion})",
+                    "No Update Available", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                MessageBox.Show($"Could not check for updates:\n{result.ErrorMessage}",
+                    "Update Check Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Error checking for updates:\n{ex.Message}",
+                "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -293,6 +380,7 @@ public partial class MainForm : Form
             _clipboardInterceptor?.Dispose();
             _trayIcon?.Dispose();
             _contextMenu?.Dispose();
+            _updateChecker = null;
         }
         base.Dispose(disposing);
     }
