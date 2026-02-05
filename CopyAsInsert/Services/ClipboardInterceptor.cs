@@ -72,7 +72,7 @@ public class ClipboardInterceptor : IDisposable
     }
 
     /// <summary>
-    /// Check if clipboard contains tabular data (TSV or CSV-like format)
+    /// Check if clipboard contains text data (any non-empty text is valid)
     /// </summary>
     public static bool IsClipboardTabularData()
     {
@@ -82,16 +82,8 @@ public class ClipboardInterceptor : IDisposable
             if (string.IsNullOrWhiteSpace(text))
                 return false;
 
-            // Split by various newline formats
-            var lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-            if (lines.Length < 2) // At least header + 1 data row
-                return false;
-
-            var firstLine = lines[0];
-            // Check for delimiters (tab preferred over comma)
-            bool hasDelimiter = firstLine.Contains('\t') || firstLine.Contains(',');
-            
-            return hasDelimiter;
+            // Accept any non-empty text (single values, multiple rows, etc.)
+            return true;
         }
         catch
         {

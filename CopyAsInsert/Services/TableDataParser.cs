@@ -39,7 +39,7 @@ public class TableDataParser
         return normalized.Normalize(NormalizationForm.FormC);
     }
     /// <summary>
-    /// Parse clipboard text as TSV or CSV
+    /// Parse clipboard text as TSV or CSV (also supports single values)
     /// </summary>
     public static DataTableSchema ParseClipboardText(string clipboardText, bool hasHeaders = true)
     {
@@ -51,16 +51,25 @@ public class TableDataParser
         if (lines.Length < 1)
             throw new InvalidOperationException("No data found in clipboard");
 
-        if (hasHeaders && lines.Length < 2)
-            throw new InvalidOperationException("At least one header row and one data row required");
+        // Allow single row if no headers
+        if (hasHeaders && lines.Length < 1)
+            throw new InvalidOperationException("At least one header row required");
 
-        // Detect delimiter (tab preference, fallback to comma)
-        var delimiter = lines[0].Contains('\t') ? '\t' : ',';
+        // Detect delimiter (tab preference, fallback to comma, fallback to no delimiter)
+        char delimiter = '\t';
+        if (!lines[0].Contains('\t'))
+        {
+            delimiter = ',';
+            if (!lines[0].Contains(','))
+            {
+                delimiter = '\0'; // No delimiter found - treat as single column
+            }
+        }
 
         var schema = new DataTableSchema
         {
             OriginalTableName = "ParsedTable",
-            DataSource = delimiter == '\t' ? "ClipboardTSV" : "ClipboardCSV"
+            DataSource = delimiter == '\t' ? "ClipboardTSV" : (delimiter == ',' ? "ClipboardCSV" : "ClipboardSingle")
         };
 
         string[] headers;
@@ -69,7 +78,9 @@ public class TableDataParser
         if (hasHeaders)
         {
             // First row is headers
-            headers = lines[0].Split(delimiter).Select(h => NormalizeColumnName(h.Trim())).ToArray();
+            headers = delimiter == '\0' 
+                ? new[] { NormalizeColumnName(lines[0].Trim()) }
+                : lines[0].Split(delimiter).Select(h => NormalizeColumnName(h.Trim())).ToArray();
             dataStartIndex = 1;
 
             if (headers.Length == 0)
@@ -78,7 +89,9 @@ public class TableDataParser
         else
         {
             // No headers - generate generic column names based on first row
-            var firstRow = lines[0].Split(delimiter);
+            var firstRow = delimiter == '\0'
+                ? new[] { lines[0].Trim() }
+                : lines[0].Split(delimiter);
             headers = new string[firstRow.Length];
             for (int i = 0; i < firstRow.Length; i++)
             {
@@ -101,7 +114,16 @@ public class TableDataParser
         // Parse data rows
         for (int i = dataStartIndex; i < lines.Length; i++)
         {
-            var values = lines[i].Split(delimiter);
+            string[] values;
+            if (delimiter == '\0')
+            {
+                // No delimiter - single column
+                values = new[] { lines[i].Trim() };
+            }
+            else
+            {
+                values = lines[i].Split(delimiter);
+            }
             
             // Pad with empty strings if columns mismatch
             var paddedValues = new List<string>();
