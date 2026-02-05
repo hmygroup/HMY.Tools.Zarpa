@@ -1,23 +1,52 @@
 namespace CopyAsInsert;
 
+using System.Threading;
+
 static class Program
 {
+    private static Mutex? _instanceMutex;
+    private const string MutexName = "ZARPA_SingleInstance";
+
     /// <summary>
     ///  The main entry point for the application.
     /// </summary>
     [STAThread]
     static void Main()
     {
-        // To customize application configuration such as set high DPI settings or default font,
-        // see https://aka.ms/applicationconfiguration.
-        ApplicationConfiguration.Initialize();
+        // Check if another instance is already running
+        _instanceMutex = new Mutex(false, MutexName);
         
-        var mainForm = new MainForm();
-        mainForm.Load += (s, e) =>
+        if (!_instanceMutex.WaitOne(0))
         {
-            // Hide after load so it's ready to receive hotkey messages
-            mainForm.Hide();
-        };
-        Application.Run(mainForm);
+            // Another instance is already running
+            MessageBox.Show(
+                "Ya hay una instancia de ZARPA abierta.",
+                "Aplicación en ejecución",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
+            return;
+        }
+
+        try
+        {
+            // To customize application configuration such as set high DPI settings or default font,
+            // see https://aka.ms/applicationconfiguration.
+            ApplicationConfiguration.Initialize();
+            
+            var mainForm = new MainForm();
+            mainForm.Load += (s, e) =>
+            {
+                // Hide after load so it's ready to receive hotkey messages
+                mainForm.Hide();
+            };
+            Application.Run(mainForm);
+        }
+        finally
+        {
+            // Release the mutex when the application exits
+            _instanceMutex?.ReleaseMutex();
+            _instanceMutex?.Dispose();
+        }
     }    
 }

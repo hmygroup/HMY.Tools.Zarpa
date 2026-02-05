@@ -46,7 +46,7 @@ public partial class MainForm : Form
     {
         this.SuspendLayout();
 
-        this.Text = "CopyAsInsert";
+        this.Text = "ZARPA";
         this.Width = 500;
         this.Height = 400;
         this.StartPosition = FormStartPosition.CenterScreen;
@@ -74,7 +74,7 @@ public partial class MainForm : Form
 
         var lblInfo = new Label
         {
-            Text = "CopyAsInsert - SQL INSERT Generator\r\n\r\nPress Alt+Shift+I after copying Excel table data to generate SQL statements.\r\n\r\nSupported formats:\r\n• Clipboard TSV/CSV\r\n• Excel files (.xlsx) drag-drop",
+            Text = "ZARPA - SQL INSERT Generator\r\n\r\nPress Alt+Shift+I after copying Excel table data to generate SQL statements.\r\n\r\nSupported formats:\r\n• Clipboard TSV/CSV\r\n• Excel files (.xlsx) drag-drop",
             Left = 10,
             Top = 10,
             Width = 480,
@@ -118,7 +118,7 @@ public partial class MainForm : Form
         {
             Icon = SystemIcons.Application,
             Visible = true,
-            Text = "CopyAsInsert - Alt+Shift+I"
+            Text = "ZARPA - Alt+Shift+I"
         };
 
         _contextMenu = new ContextMenuStrip();
@@ -139,7 +139,7 @@ public partial class MainForm : Form
         _trayIcon.DoubleClick += (s, e) => ShowMainWindow();
         
         // Show that tray icon is ready
-        _trayIcon.ShowBalloonTip(1500, "CopyAsInsert", "Starting...", ToolTipIcon.Info);
+        _trayIcon.ShowBalloonTip(1500, "ZARPA", "Starting...", ToolTipIcon.Info);
     }
 
     private void SetupHotkey()
