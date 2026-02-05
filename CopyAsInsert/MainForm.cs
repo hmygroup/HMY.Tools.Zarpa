@@ -357,7 +357,9 @@ public partial class MainForm : Form
             }
             else if (string.IsNullOrEmpty(result.ErrorMessage))
             {
-                MessageBox.Show($"You are using the latest version ({result.CurrentVersion})",
+                // No error and no update available - show appropriate message
+                MessageBox.Show($"You are using version {result.CurrentVersion}.\n\n" +
+                    $"No newer releases are currently available.",
                     "No Update Available", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else

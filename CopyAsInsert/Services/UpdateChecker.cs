@@ -55,6 +55,17 @@ namespace CopyAsInsert.Services
                     
                     if (!response.IsSuccessStatusCode)
                     {
+                        // 404 means no releases published yet (normal during initial development)
+                        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        {
+                            return new UpdateCheckResult
+                            {
+                                IsUpdateAvailable = false,
+                                CurrentVersion = _currentVersion,
+                                ErrorMessage = null // No error - releases just haven't been published yet
+                            };
+                        }
+
                         return new UpdateCheckResult
                         {
                             IsUpdateAvailable = false,
