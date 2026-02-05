@@ -11,10 +11,10 @@
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ApplicationIcon>Group-3.ico</ApplicationIcon>
-    <Version>1.0.9</Version>
-    <AssemblyVersion>1.0.9.0</AssemblyVersion>
-    <FileVersion>1.0.9.0</FileVersion>
-    <InformationalVersion>1.0.9</InformationalVersion>
+    <Version>1.0.8</Version>
+    <AssemblyVersion>1.0.8.0</AssemblyVersion>
+    <FileVersion>1.0.8.0</FileVersion>
+    <InformationalVersion>1.0.8</InformationalVersion>
     <ProductName>CopyAsInsert</ProductName>
     <CompanyName>HMY Group</CompanyName>
   </PropertyGroup>
@@ -31,5 +31,40 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <Target Name="PublishUpdater" BeforeTargets="OrganizeReleaseFiles">
+    <!-- Build and publish the updater project with absolute paths -->
+    <PropertyGroup>
+      <UpdaterProjectPath>$([System.IO.Path]::Combine("$(MSBuildProjectDirectory)", "..", "CopyAsInsert.Updater", "CopyAsInsert.Updater.csproj"))</UpdaterProjectPath>
+      <UpdaterPublishOutput>$([System.IO.Path]::Combine("$(MSBuildProjectDirectory)", "..", "CopyAsInsert.Updater", "bin", "Release", "net8.0-windows", "win-x64", "publish"))</UpdaterPublishOutput>
+    </PropertyGroup>
+    <Exec Command="dotnet publish &quot;$(UpdaterProjectPath)&quot; -c Release -o &quot;$(UpdaterPublishOutput)&quot;" />
+  </Target>
+
+  <Target Name="OrganizeReleaseFiles" AfterTargets="Publish">
+    <!-- Create the organized release folder with all files -->
+    <PropertyGroup>
+      <ReleaseFolder>$(PublishDir)CopyAsInsert</ReleaseFolder>
+      <UpdaterPublishOutput>$([System.IO.Path]::Combine("$(MSBuildProjectDirectory)", "..", "CopyAsInsert.Updater", "bin", "Release", "net8.0-windows", "win-x64", "publish"))</UpdaterPublishOutput>
+      <UpdaterExePath>$([System.IO.Path]::Combine("$(UpdaterPublishOutput)", "CopyAsInsert.Updater.exe"))</UpdaterExePath>
+      <ReadmePath>$([System.IO.Path]::GetFullPath("$([System.IO.Path]::Combine("$(MSBuildProjectDirectory)", "..", "README.md"))"))</ReadmePath>
+      <SetupAutoStartPath>$([System.IO.Path]::GetFullPath("$([System.IO.Path]::Combine("$(MSBuildProjectDirectory)", "..", "Scripts", "SetupAutoStart.bat"))"))</SetupAutoStartPath>
+    </PropertyGroup>
+    
+    <!-- Create the release folder -->
+    <MakeDir Directories="$(ReleaseFolder)" />
+    
+    <!-- Copy main application files -->
+    <Copy SourceFiles="$(PublishDir)CopyAsInsert.exe" DestinationFolder="$(ReleaseFolder)" />
+    <Copy SourceFiles="$(PublishDir)CopyAsInsert.pdb" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(PublishDir)CopyAsInsert.pdb')" />
+    <Copy SourceFiles="$(PublishDir)Group-3.ico" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(PublishDir)Group-3.ico')" />
+    
+    <!-- Copy updater executable -->
+    <Copy SourceFiles="$(UpdaterExePath)" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(UpdaterExePath)')" />
+    
+    <!-- Copy documentation and helper scripts -->
+    <Copy SourceFiles="$(ReadmePath)" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(ReadmePath)')" />
+    <Copy SourceFiles="$(SetupAutoStartPath)" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(SetupAutoStartPath)')" />
+  </Target>
 
 </Project>

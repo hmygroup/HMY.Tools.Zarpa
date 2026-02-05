@@ -145,13 +145,22 @@ public class SqlServerGenerator
     /// <summary>
     /// Generate INSERT INTO statements (batched in groups of 1000)
     /// Includes ALL columns - no exclusions
+    /// Must match the table name used in CREATE TABLE
     /// </summary>
     private static string GenerateInsertStatements(DataTableSchema schema, string tableName, string schema_name, bool isTemporaryTable = false)
     {
         var sb = new StringBuilder();
 
-        // Simple table name
-        string fullTableName = $"[{schema_name}].[{tableName}]";
+        // Table name must match CREATE TABLE exactly
+        string fullTableName;
+        if (isTemporaryTable)
+        {
+            fullTableName = $"[#{tableName}_Temporal]";
+        }
+        else
+        {
+            fullTableName = $"[{schema_name}].[{tableName}_Temporal]";
+        }
         
         // Build column list - ALL columns, no skipping
         var insertColumns = new List<string>();

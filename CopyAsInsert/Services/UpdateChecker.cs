@@ -101,25 +101,10 @@ namespace CopyAsInsert.Services
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        // 404 means no releases published yet (normal during initial development)
-                        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                        {
-                            Log("No releases found (404) - this is normal for repositories without releases");
-                            return new UpdateCheckResult
-                            {
-                                IsUpdateAvailable = false,
-                                CurrentVersion = _currentVersion,
-                                ErrorMessage = null
-                            };
-                        }
-
-                        var errorMsg = $"Failed to check for updates: HTTP {(int)response.StatusCode}";
-                        Log(errorMsg);
+                        Log($"ERROR: HTTP {(int)response.StatusCode}: {response.StatusCode}");
                         return new UpdateCheckResult
                         {
-                            IsUpdateAvailable = false,
-                            CurrentVersion = _currentVersion,
-                            ErrorMessage = errorMsg
+                            ErrorMessage = $"HTTP Error {(int)response.StatusCode}"
                         };
                     }
 
@@ -127,207 +112,135 @@ namespace CopyAsInsert.Services
                     Log($"Response content length: {content.Length} bytes");
                     Log($"Raw response (first 500 chars): {content.Substring(0, Math.Min(500, content.Length))}");
 
-                    JsonDocument jsonDoc;
-                    try
+                    using (JsonDocument doc = JsonDocument.Parse(content))
                     {
-                        jsonDoc = JsonDocument.Parse(content);
                         Log("JSON parsed successfully");
-                    }
-                    catch (Exception jsonEx)
-                    {
-                        Log($"Failed to parse JSON: {jsonEx.Message}");
+                        var root = doc.RootElement;
+
+                        // Get tag name and convert to version (e.g., "v1.0.9" -> "1.0.9")
+                        var tagName = root.GetProperty("tag_name").GetString() ?? "";
+                        Log($"Tag name from response: {tagName}");
+
+                        var version = CleanVersion(tagName);
+                        Log($"Cleaned version: {version}");
+
+                        // Compare versions
+                        var versionComparison = CompareVersions(_currentVersion, version);
+                        Log($"Version comparison: current={_currentVersion}, latest={version}, result={versionComparison}");
+
+                        if (versionComparison >= 0)
+                        {
+                            // No update available
+                            Log("No update available");
+                            return new UpdateCheckResult
+                            {
+                                IsUpdateAvailable = false,
+                                CurrentVersion = _currentVersion,
+                                AvailableVersion = version
+                            };
+                        }
+
+                        // Update is available - find the exe asset
+                        var assets = root.GetProperty("assets");
+                        Log($"Found {assets.GetArrayLength()} assets");
+
+                        string? downloadUrl = null;
+                        foreach (var asset in assets.EnumerateArray())
+                        {
+                            var assetName = asset.GetProperty("name").GetString() ?? "";
+                            Log($"Checking asset: {assetName}");
+
+                            if (assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                            {
+                                downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                                Log($"Found EXE asset download URL: {downloadUrl}");
+                                break;
+                            }
+                        }
+
+                        // Get release notes
+                        var body = root.GetProperty("body").GetString() ?? "";
+                        Log($"Release notes retrieved: {body.Length} characters");
+
+                        Log("Update available: True");
                         return new UpdateCheckResult
                         {
-                            IsUpdateAvailable = false,
+                            IsUpdateAvailable = true,
                             CurrentVersion = _currentVersion,
-                            ErrorMessage = $"Failed to parse GitHub response: {jsonEx.Message}"
+                            AvailableVersion = version,
+                            DownloadUrl = downloadUrl,
+                            ReleaseNotes = body
                         };
                     }
-
-                    var latestVersion = ExtractVersionFromGitHubResponse(jsonDoc);
-                    Log($"Extracted version from response: {latestVersion}");
-
-                    if (latestVersion == null)
-                    {
-                        Log("Failed to extract version from GitHub response");
-                        return new UpdateCheckResult
-                        {
-                            IsUpdateAvailable = false,
-                            CurrentVersion = _currentVersion,
-                            ErrorMessage = "Could not parse version from response"
-                        };
-                    }
-
-                    var compareResult = CompareVersions(_currentVersion, latestVersion);
-                    Log($"Version comparison: current={_currentVersion}, latest={latestVersion}, result={compareResult}");
-                    var isNewer = compareResult < 0;
-
-                    var downloadUrl = ExtractDownloadUrlFromGitHubResponse(jsonDoc);
-                    var releaseNotes = ExtractReleaseNotesFromGitHubResponse(jsonDoc);
-                    
-                    Log($"Download URL: {downloadUrl}");
-                    Log($"Update available: {isNewer}");
-
-                    return new UpdateCheckResult
-                    {
-                        IsUpdateAvailable = isNewer,
-                        CurrentVersion = _currentVersion,
-                        AvailableVersion = latestVersion,
-                        DownloadUrl = downloadUrl,
-                        ReleaseNotes = releaseNotes
-                    };
                 }
+            }
+            catch (JsonException ex)
+            {
+                Log($"JSON parsing error: {ex.Message}");
+                return new UpdateCheckResult { ErrorMessage = "Invalid response from server" };
+            }
+            catch (HttpRequestException ex)
+            {
+                Log($"Network error: {ex.Message}");
+                return new UpdateCheckResult { ErrorMessage = $"Network error: {ex.Message}" };
+            }
+            catch (TaskCanceledException ex)
+            {
+                Log($"Request timeout: {ex.Message}");
+                return new UpdateCheckResult { ErrorMessage = "Request timed out" };
             }
             catch (Exception ex)
             {
-                Log($"Exception during update check: {ex.GetType().Name}: {ex.Message}");
+                Log($"ERROR: {ex.GetType().Name}: {ex.Message}");
                 Log($"Stack trace: {ex.StackTrace}");
-                
-                return new UpdateCheckResult
+                return new UpdateCheckResult { ErrorMessage = ex.Message };
+            }
+        }
+
+        private string CleanVersion(string version)
+        {
+            // Remove leading 'v' if present
+            if (version.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+                version = version.Substring(1);
+            return version;
+        }
+
+        /// <summary>
+        /// Compares two semantic versions.
+        /// Returns: negative if v1 < v2, zero if equal, positive if v1 > v2
+        /// </summary>
+        private int CompareVersions(string v1, string v2)
+        {
+            try
+            {
+                var parts1 = v1.Split('.');
+                var parts2 = v2.Split('.');
+
+                int maxParts = Math.Max(parts1.Length, parts2.Length);
+
+                for (int i = 0; i < maxParts; i++)
                 {
-                    IsUpdateAvailable = false,
-                    CurrentVersion = _currentVersion,
-                    ErrorMessage = $"Error checking for updates: {ex.Message}"
-                };
+                    int num1 = i < parts1.Length && int.TryParse(parts1[i], out int n1) ? n1 : 0;
+                    int num2 = i < parts2.Length && int.TryParse(parts2[i], out int n2) ? n2 : 0;
+
+                    if (num1 < num2) return -1;
+                    if (num1 > num2) return 1;
+                }
+
+                return 0;
+            }
+            catch
+            {
+                return 0;
             }
         }
 
         /// <summary>
-        /// Compares two version strings. Returns negative if v1 is older, 0 if equal, positive if v1 is newer
+        /// Gets the path to the updater executable
         /// </summary>
-        private int CompareVersions(string v1, string v2)
+        public string GetUpdaterPath()
         {
-            var parts1 = v1.Split('.');
-            var parts2 = v2.Split('.');
-
-            int maxLength = Math.Max(parts1.Length, parts2.Length);
-
-            for (int i = 0; i < maxLength; i++)
-            {
-                int num1 = i < parts1.Length && int.TryParse(parts1[i], out var n1) ? n1 : 0;
-                int num2 = i < parts2.Length && int.TryParse(parts2[i], out var n2) ? n2 : 0;
-
-                if (num1 < num2) return -1;
-                if (num1 > num2) return 1;
-            }
-
-            return 0;
-        }
-
-        private string? ExtractVersionFromGitHubResponse(JsonDocument doc)
-        {
-            try
-            {
-                var root = doc.RootElement;
-                
-                if (!root.TryGetProperty("tag_name", out var tagNameElement))
-                {
-                    Log("ERROR: 'tag_name' property not found in response");
-                    return null;
-                }
-
-                var tagName = tagNameElement.GetString();
-                Log($"Tag name from response: {tagName}");
-                
-                if (string.IsNullOrEmpty(tagName))
-                {
-                    Log("ERROR: 'tag_name' is empty or null");
-                    return null;
-                }
-
-                var version = tagName.TrimStart('v');
-                Log($"Cleaned version: {version}");
-                return version;
-            }
-            catch (Exception ex)
-            {
-                Log($"ERROR in ExtractVersionFromGitHubResponse: {ex.GetType().Name}: {ex.Message}");
-                return null;
-            }
-        }
-
-        private string? ExtractDownloadUrlFromGitHubResponse(JsonDocument doc)
-        {
-            try
-            {
-                var root = doc.RootElement;
-                
-                if (!root.TryGetProperty("assets", out var assetsElement))
-                {
-                    Log("WARNING: 'assets' property not found, trying html_url fallback");
-                    if (root.TryGetProperty("html_url", out var htmlUrlElement))
-                    {
-                        return htmlUrlElement.GetString();
-                    }
-                    return null;
-                }
-
-                if (assetsElement.ValueKind != JsonValueKind.Array)
-                {
-                    Log($"WARNING: 'assets' is not an array (type: {assetsElement.ValueKind})");
-                    return null;
-                }
-
-                Log($"Found {assetsElement.GetArrayLength()} assets");
-
-                foreach (var asset in assetsElement.EnumerateArray())
-                {
-                    if (!asset.TryGetProperty("name", out var nameElement))
-                    {
-                        Log("WARNING: Asset without 'name' property");
-                        continue;
-                    }
-
-                    var fileName = nameElement.GetString() ?? "";
-                    Log($"Checking asset: {fileName}");
-
-                    if (fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (asset.TryGetProperty("browser_download_url", out var urlElement))
-                        {
-                            var url = urlElement.GetString();
-                            Log($"Found EXE asset download URL: {url}");
-                            return url;
-                        }
-                    }
-                }
-
-                Log("No .exe asset found, falling back to html_url");
-                if (root.TryGetProperty("html_url", out var htmlUrl))
-                {
-                    return htmlUrl.GetString();
-                }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                Log($"ERROR in ExtractDownloadUrlFromGitHubResponse: {ex.GetType().Name}: {ex.Message}");
-                return null;
-            }
-        }
-
-        private string? ExtractReleaseNotesFromGitHubResponse(JsonDocument doc)
-        {
-            try
-            {
-                var root = doc.RootElement;
-                
-                if (!root.TryGetProperty("body", out var bodyElement))
-                {
-                    Log("WARNING: 'body' property not found");
-                    return null;
-                }
-
-                var body = bodyElement.GetString();
-                Log($"Release notes retrieved: {body?.Length ?? 0} characters");
-                return body;
-            }
-            catch (Exception ex)
-            {
-                Log($"ERROR in ExtractReleaseNotesFromGitHubResponse: {ex.GetType().Name}: {ex.Message}");
-                return null;
-            }
+            return Path.Combine(_installationPath, "CopyAsInsert.Updater.exe");
         }
     }
 

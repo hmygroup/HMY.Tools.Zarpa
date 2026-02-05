@@ -1,2 +1,4 @@
 <Solution>
+    <Project Path="CopyAsInsert\CopyAsInsert.csproj" />
+    <Project Path="CopyAsInsert.Updater\CopyAsInsert.Updater.csproj" />
 </Solution>

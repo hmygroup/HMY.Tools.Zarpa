@@ -355,30 +355,15 @@ public partial class MainForm : Form
                 var message = $"Update Available!\n\n" +
                     $"Current Version: {result.CurrentVersion}\n" +
                     $"Latest Version: {result.AvailableVersion}\n\n" +
-                    $"Would you like to download the update?";
+                    $"Would you like to download and install the update?";
 
                 var dialogResult = MessageBox.Show(message, "Update Available",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Information);
 
                 if (dialogResult == DialogResult.Yes)
                 {
-                    // Open the download URL or GitHub releases page
-                    var downloadUrl = result.DownloadUrl ?? "https://github.com/hmygroup/HMY.Tools.Zarpa/releases";
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = downloadUrl,
-                        UseShellExecute = true
-                    });
-
-                    // Show instructions
-                    MessageBox.Show(
-                        "After downloading:\n\n" +
-                        "1. Run UpdateCopyAsInsert.bat\n" +
-                        "2. Select the downloaded CopyAsInsert.exe\n\n" +
-                        "The script will handle the update automatically.",
-                        "Update Instructions",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
+                    // Launch the updater with download URL and version
+                    LaunchUpdateProcess(result);
                 }
             }
             else if (string.IsNullOrEmpty(result.ErrorMessage))
@@ -400,6 +385,59 @@ public partial class MainForm : Form
                 "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
+
+    private void LaunchUpdateProcess(UpdateCheckResult result)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(result.DownloadUrl) || string.IsNullOrEmpty(result.AvailableVersion))
+            {
+                MessageBox.Show("Could not determine update information.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            _updateChecker ??= new UpdateChecker();
+            var updaterPath = _updateChecker.GetUpdaterPath();
+
+            if (!File.Exists(updaterPath))
+            {
+                MessageBox.Show($"Updater not found: {updaterPath}\n\nPlease download and reinstall the application.",
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            Logger.LogInfo($"Launching updater: {updaterPath}");
+            Logger.LogInfo($"Download URL: {result.DownloadUrl}");
+            Logger.LogInfo($"Version: {result.AvailableVersion}");
+
+            // Build arguments for the updater
+            var appPath = AppContext.BaseDirectory;
+            var args = $"--version {result.AvailableVersion} --url \"{result.DownloadUrl}\" --app-path \"{appPath}\"";
+
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = updaterPath,
+                Arguments = args,
+                UseShellExecute = true,
+                CreateNoWindow = false
+            };
+
+            System.Diagnostics.Process.Start(startInfo);
+
+            // Show message and exit this application
+            MessageBox.Show("The update process has started.\n\nThe application will close now.",
+                "Update Starting", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            Logger.LogInfo("Exiting application to allow updater to proceed");
+            Application.Exit();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("Error launching update process", ex);
+            MessageBox.Show($"Error starting update:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
 
     protected override void Dispose(bool disposing)
     {

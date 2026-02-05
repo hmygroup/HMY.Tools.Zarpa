@@ -11,12 +11,15 @@ static class Program
     ///  The main entry point for the application.
     /// </summary>
     [STAThread]
-    static void Main()
+    static void Main(string[] args)
     {
-        // Check if another instance is already running
+        // Check if this is an update restart (new instance started by updater)
+        bool isUpdateRestart = args.Contains("--update-restart");
+
+        // Check if another instance is already running (skip check for update restarts)
         _instanceMutex = new Mutex(false, MutexName);
         
-        if (!_instanceMutex.WaitOne(0))
+        if (!isUpdateRestart && !_instanceMutex.WaitOne(0))
         {
             // Another instance is already running
             MessageBox.Show(
@@ -26,6 +29,12 @@ static class Program
                 MessageBoxIcon.Information
             );
             return;
+        }
+
+        // Acquire the mutex if this is an update restart
+        if (isUpdateRestart)
+        {
+            _instanceMutex.WaitOne();
         }
 
         try
@@ -48,5 +57,5 @@ static class Program
             _instanceMutex?.ReleaseMutex();
             _instanceMutex?.Dispose();
         }
-    }    
+    }
 }

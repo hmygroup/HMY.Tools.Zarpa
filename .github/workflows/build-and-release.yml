@@ -43,10 +43,26 @@ jobs:
       - name: Build project
         run: dotnet build CopyAsInsert/CopyAsInsert.csproj -c Release --no-restore
 
-      - name: Publish portable executable
-        run: dotnet publish CopyAsInsert/CopyAsInsert.csproj -p:PublishProfile=Portable -c Release
+      - name: Publish project
+        run: dotnet publish CopyAsInsert/CopyAsInsert.csproj -c Release --no-build
 
       - name: Create Release and Upload Assets
+        shell: pwsh
+        run: |
+          # Create a zip file of the organized release folder (includes updater automatically)
+          $publishPath = "CopyAsInsert/bin/Release/net8.0-windows/win-x64/publish/CopyAsInsert"
+          $zipPath = "CopyAsInsert-v${{ steps.version.outputs.VERSION }}.zip"
+          
+          if (Test-Path $publishPath) {
+            Compress-Archive -Path $publishPath -DestinationPath $zipPath -Force
+            Write-Host "✓ Created $zipPath with organized release structure"
+            Get-ChildItem $publishPath | ForEach-Object { Write-Host "  - $($_.Name)" }
+          } else {
+            Write-Host "ERROR: Publish folder not found at $publishPath"
+            exit 1
+          }
+
+      - name: Upload Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
@@ -54,23 +70,38 @@ jobs:
           body: |
             ## CopyAsInsert v${{ steps.version.outputs.VERSION }}
             
-            ### Release Notes
-            Check the commit history for detailed changes.
-            
             ### Installation
-            1. Download `CopyAsInsert.exe` below
-            2. Run the executable directly
-            3. Optional: Run `SetupAutoStart.bat` to enable auto-start
+            1. Download `CopyAsInsert-v${{ steps.version.outputs.VERSION }}.zip` from the Assets section
+            2. Extract the zip file to any folder (e.g., `C:\Program Files\CopyAsInsert`)
+            3. Run `CopyAsInsert.exe` from the extracted folder
+            4. (Optional) Run `SetupAutoStart.bat` to enable auto-start on Windows startup
             
-            ### Updates
-            To update from a previous version:
-            ```
-            UpdateCopyAsInsert.bat "path-to-new-CopyAsInsert.exe"
-            ```
+            ### Automatic Updates
+            The application now includes a built-in updater (`CopyAsInsert.Updater.exe`) that handles the entire update process:
+            - App periodically checks for new versions from GitHub
+            - When an update is available, you'll see a notification in the system tray
+            - Click the notification or use the tray menu → "Check for Update"
+            - The updater downloads, verifies, and installs the update automatically
+            - App restarts with the new version - no manual steps required!
+            
+            ### What's Included
+            - `CopyAsInsert.exe` - Main application (167 MB)
+            - `CopyAsInsert.Updater.exe` - Automatic update tool (162 MB)
+            - `SetupAutoStart.bat` - Optional: Enable auto-start on Windows startup
+            - `Group-3.ico` - Application icon
+            - `CopyAsInsert.pdb` - Debug symbols
+            - Complete README with feature details
+            
+            ### System Requirements
+            - Windows 10 or later
+            - .NET 8.0 runtime (self-contained in exe, no separate installation needed)
+            - ~340 MB disk space for the application
+            
+            ### Rollback
+            If you need to revert to a previous version, simply download and extract an older release zip and run that version.
           draft: false
           prerelease: false
           files: |
-            CopyAsInsert/bin/Release/net8.0-windows/publish/CopyAsInsert.exe
-            CopyAsInsert/Group-3.ico
+            CopyAsInsert-v${{ steps.version.outputs.VERSION }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
