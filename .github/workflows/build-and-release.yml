@@ -8,9 +8,16 @@ on:
       - 'CopyAsInsert/**'
       - '.github/workflows/build-and-release.yml'
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
+      packages: write
     
     steps:
       - name: Checkout code
@@ -39,14 +46,11 @@ jobs:
       - name: Publish portable executable
         run: dotnet publish CopyAsInsert/CopyAsInsert.csproj -p:PublishProfile=Portable -c Release
 
-      - name: Create Release
-        uses: actions/create-release@v1
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
-          release_name: Release v${{ steps.version.outputs.VERSION }}
+          name: Release v${{ steps.version.outputs.VERSION }}
           body: |
             ## CopyAsInsert v${{ steps.version.outputs.VERSION }}
             
@@ -65,38 +69,8 @@ jobs:
             ```
           draft: false
           prerelease: false
-
-      - name: Upload Release Asset (EXE)
-        uses: actions/upload-release-asset@v1
+          files: |
+            CopyAsInsert/bin/Release/net8.0-windows/publish/CopyAsInsert.exe
+            CopyAsInsert/Group-3.ico
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: CopyAsInsert/bin/Release/net8.0-windows/publish/CopyAsInsert.exe
-          asset_name: CopyAsInsert-v${{ steps.version.outputs.VERSION }}.exe
-          asset_content_type: application/octet-stream
-
-      - name: Upload Release Asset (Icon)
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: CopyAsInsert/Group-3.ico
-          asset_name: Group-3.ico
-          asset_content_type: image/x-icon
-
-      - name: Comment on commit
-        if: success()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.git.createRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: 'refs/tags/v${{ steps.version.outputs.VERSION }}',
-              sha: context.sha
-            }).catch(() => {
-              // Tag might already exist, that's okay
-              console.log('Tag already exists');
-            });
