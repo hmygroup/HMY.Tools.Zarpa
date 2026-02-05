@@ -18,6 +18,7 @@ public partial class MainForm : Form
 
     private string _defaultSchema = "dbo";
     private bool _temporalTableByDefault = true;
+    private bool _runOnStartup = false;
     private bool _hotkeyRegistered = false;
 
     public MainForm()
@@ -31,6 +32,11 @@ public partial class MainForm : Form
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
+        // Load settings from file
+        var settings = SettingsManager.LoadSettings();
+        _defaultSchema = settings.DefaultSchema;
+        _temporalTableByDefault = settings.TemporalTableByDefault;
+        _runOnStartup = settings.RunOnStartup;
         // Set up tray icon first
         SetupTrayIcon();
         // Register hotkey after form is fully created and has window handle
@@ -290,13 +296,35 @@ public partial class MainForm : Form
         var settingsForm = new SettingsForm
         {
             DefaultSchema = _defaultSchema,
-            TemporalTableByDefault = _temporalTableByDefault
+            TemporalTableByDefault = _temporalTableByDefault,
+            RunOnStartup = _runOnStartup
         };
 
         if (settingsForm.ShowDialog() == DialogResult.OK)
         {
             _defaultSchema = settingsForm.DefaultSchema;
             _temporalTableByDefault = settingsForm.TemporalTableByDefault;
+            _runOnStartup = settingsForm.RunOnStartup;
+
+            // Save settings to file
+            var settings = new SettingsManager.ApplicationSettings
+            {
+                DefaultSchema = _defaultSchema,
+                AutoCreateHistoryTable = true, // This wasn't being used, keeping as default
+                TemporalTableByDefault = _temporalTableByDefault,
+                RunOnStartup = _runOnStartup
+            };
+            SettingsManager.SaveSettings(settings);
+
+            // Update Registry for startup
+            if (_runOnStartup)
+            {
+                StartupManager.EnableStartup();
+            }
+            else
+            {
+                StartupManager.DisableStartup();
+            }
         }
     }
 

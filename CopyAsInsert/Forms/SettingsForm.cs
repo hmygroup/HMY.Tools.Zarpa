@@ -8,6 +8,7 @@ public partial class SettingsForm : Form
     public string DefaultSchema { get; set; }
     public bool AutoCreateHistoryTable { get; set; }
     public bool TemporalTableByDefault { get; set; }
+    public bool RunOnStartup { get; set; }
 
     public SettingsForm()
     {
@@ -15,6 +16,7 @@ public partial class SettingsForm : Form
         DefaultSchema = "dbo";
         AutoCreateHistoryTable = true;
         TemporalTableByDefault = true;
+        RunOnStartup = false;
     }
 
     private void InitializeComponent()
@@ -26,7 +28,7 @@ public partial class SettingsForm : Form
         this.Text = "Settings";
         this.Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
         this.Width = 400;
-        this.Height = 300;
+        this.Height = 350;
         this.StartPosition = FormStartPosition.CenterScreen;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
         this.MaximizeBox = false;
@@ -78,6 +80,18 @@ public partial class SettingsForm : Form
             Checked = TemporalTableByDefault
         };
 
+        // Run on Startup Checkbox
+        var chkRunOnStartup = new CheckBox
+        {
+            Name = "chkRunOnStartup",
+            Text = "Run on Windows startup",
+            Left = 20,
+            Top = 150,
+            Width = 350,
+            Height = 20,
+            Checked = RunOnStartup
+        };
+
         // OK Button
         var btnOK = new Button
         {
@@ -104,6 +118,7 @@ public partial class SettingsForm : Form
         this.Controls.Add(txtSchema);
         this.Controls.Add(chkAutoHistory);
         this.Controls.Add(chkTemporal);
+        this.Controls.Add(chkRunOnStartup);
         this.Controls.Add(btnOK);
         this.Controls.Add(btnCancel);
 
@@ -117,6 +132,7 @@ public partial class SettingsForm : Form
                 DefaultSchema = txtSchema.Text.Trim();
                 AutoCreateHistoryTable = chkAutoHistory.Checked;
                 TemporalTableByDefault = chkTemporal.Checked;
+                RunOnStartup = chkRunOnStartup.Checked;
             }
         };
 
