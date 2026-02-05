@@ -452,12 +452,10 @@ public partial class MainForm : Form
 
             System.Diagnostics.Process.Start(startInfo);
 
-            // Show message and exit this application
-            MessageBox.Show("The update process has started.\n\nThe application will close now.",
-                "Update Starting", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-            Logger.LogInfo("Exiting application to allow updater to proceed");
-            Application.Exit();
+            // Force immediate exit to release file locks for updater
+            Logger.LogInfo("Update approved. Closing application immediately for file replacement.");
+            Logger.CloseAndFlush();
+            Environment.Exit(0);
         }
         catch (Exception ex)
         {

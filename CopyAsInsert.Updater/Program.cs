@@ -254,7 +254,7 @@ namespace CopyAsInsert.Updater
 
                 // Wait for file locks to release (main process exiting)
                 int attempts = 0;
-                while (attempts < 10)
+                while (attempts < 20)
                 {
                     try
                     {
@@ -274,9 +274,9 @@ namespace CopyAsInsert.Updater
                     catch (IOException ex)
                     {
                         attempts++;
-                        if (attempts >= 10)
+                        if (attempts >= 20)
                         {
-                            Log($"ERROR: Could not replace file after {attempts} attempts: {ex.Message}");
+                            Log($"ERROR: Could not replace file after {attempts} attempts (10 seconds): {ex.Message}");
                             // Try to restore backup
                             if (File.Exists(backupPath))
                             {
