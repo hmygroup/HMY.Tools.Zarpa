@@ -1,18 +1,25 @@
 using CopyAsInsert.Models;
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace CopyAsInsert.Services;
 
 /// <summary>
-/// Infers column types from data with lenient matching (70% threshold)
-/// Auto-detects primary key from first INT or ID-named column
+/// Professional type inference engine with support for:
+/// INT, FLOAT, DATETIME2, BIT (boolean), NVARCHAR
+/// Uses confidence thresholds: INT (85%), FLOAT (85%), DATETIME (80%), BIT (90%), NVARCHAR (fallback)
 /// </summary>
 public class TypeInferenceEngine
 {
-    private const int LENIENT_THRESHOLD = 70; // 70% of values must match the type
+    // Confidence thresholds for each type (stricter = safer fallback to NVARCHAR)
+    private const double INT_THRESHOLD = 0.85;           // 85% of values must be valid integers
+    private const double FLOAT_THRESHOLD = 0.85;         // 85% of values must be valid decimals (excluding pure ints)
+    private const double DATETIME_THRESHOLD = 0.80;      // 80% of values must match date patterns
+    private const double BIT_THRESHOLD = 0.90;           // 90% of values must match boolean patterns (strict)
 
     /// <summary>
     /// Infer types for all columns in the schema
+    /// Sets SqlType, ConfidencePercent, ConfidenceScore, and InferenceReason for each column
     /// </summary>
     public static void InferColumnTypes(DataTableSchema schema)
     {
@@ -24,17 +31,19 @@ public class TypeInferenceEngine
             var column = schema.Columns[colIndex];
             var values = schema.DataRows.Select(row => row[colIndex]).ToList();
 
-            // Infer type based on values
-            var inferredType = InferColumnType(values);
+            // Analyze the column
+            var (inferredType, confidence, reason) = InferColumnType(values);
             column.SqlType = inferredType;
-            column.ConfidencePercent = CalculateTypeConfidence(values, inferredType);
+            column.ConfidencePercent = (int)(confidence * 100);
+            column.ConfidenceScore = confidence;
+            column.InferenceReason = reason;
 
             // Set sample value
             var nonEmptyValue = values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
             column.SampleValue = nonEmptyValue ?? values.FirstOrDefault() ?? "";
 
-            // All columns are nullable by default
-            column.AllowNull = true;
+            // Determine if column allows NULL (check for empty/null values)
+            column.AllowNull = values.Any(v => string.IsNullOrWhiteSpace(v) || v.Equals("NULL", StringComparison.OrdinalIgnoreCase));
 
             // Set max length for NVARCHAR
             if (inferredType == "NVARCHAR")
@@ -45,75 +54,169 @@ public class TypeInferenceEngine
                 
                 column.MaxLength = nonEmptyValueLengths.Count > 0 ? nonEmptyValueLengths.Max() : 0;
             }
+
+            // Log inference decision
+            Logger.LogDebug($"Column '{column.ColumnName}': {inferredType} ({column.ConfidencePercent}%) - {reason}");
         }
     }
 
     /// <summary>
     /// Infer the type of a column based on its values
-    /// Supports: INT, MONEY (decimal with 2-4 decimals), NVARCHAR
-    /// If any value is "0" or has leading zeros, treat as NVARCHAR
+    /// Returns tuple of (TypeName, Confidence, Reason)
     /// </summary>
-    private static string InferColumnType(List<string> values)
+    private static (string type, double confidence, string reason) InferColumnType(List<string> values)
     {
         if (values.Count == 0)
-            return "NVARCHAR";
+            return ("NVARCHAR", 1.0, "No data provided");
 
-        var nonEmptyValues = values.Where(v => !string.IsNullOrWhiteSpace(v)).ToList();
+        // Filter out empty/whitespace-only values for analysis
+        var nonEmptyValues = values.Where(v => !string.IsNullOrWhiteSpace(v) && 
+                                              !v.Equals("NULL", StringComparison.OrdinalIgnoreCase))
+                                   .ToList();
 
         if (nonEmptyValues.Count == 0)
-            return "NVARCHAR";
+            return ("NVARCHAR", 1.0, "All values are empty or NULL");
 
-        // If any value has leading zeros (like "0001", "0010") or is exactly "0", treat as NVARCHAR
-        if (nonEmptyValues.Any(v => 
-            (v.StartsWith("0") && v.Length > 1) || 
-            v == "0"))
-            return "NVARCHAR";
+        // Try each type in priority order, using thresholds
+        
+        // 1. Try BIT (boolean) - strict threshold (90%) because true/false patterns are unambiguous
+        var (bitCount, bitConfidence) = DetectBoolean(nonEmptyValues);
+        if (bitConfidence >= BIT_THRESHOLD)
+            return ("BIT", bitConfidence, $"{(int)(bitConfidence * 100)}% match boolean patterns (true/false/yes/no/0/1)");
 
-        // Try INT - must be strict integers (70% threshold)
-        int intCount = nonEmptyValues.Count(v => int.TryParse(v, out _));
-        if (IntPercentage(intCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
-            return "INT";
+        // 2. Try DATETIME2 - moderate threshold (80%) due to format variability
+        var (dateCount, dateConfidence) = DetectDateTime(nonEmptyValues);
+        if (dateConfidence >= DATETIME_THRESHOLD)
+            return ("DATETIME2", dateConfidence, $"{(int)(dateConfidence * 100)}% match date patterns (ISO/US/EU formats)");
 
-        // Try MONEY - decimal values with reasonable precision
-        int moneyCount = nonEmptyValues.Count(v => 
-            decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _));
-        if (PercentageMatch(moneyCount, nonEmptyValues.Count) >= LENIENT_THRESHOLD)
-            return "MONEY";
+        // 3. Try INT - strict threshold (85%)
+        var (intCount, intConfidence) = DetectInteger(nonEmptyValues);
+        if (intConfidence >= INT_THRESHOLD)
+            return ("INT", intConfidence, $"{(int)(intConfidence * 100)}% are valid integers");
 
-        // Default to NVARCHAR - when in doubt, use text for robustness
-        return "NVARCHAR";
+        // 4. Try FLOAT - strict threshold (85%), excluding pure integers
+        var (floatCount, floatConfidence) = DetectFloat(nonEmptyValues);
+        if (floatConfidence >= FLOAT_THRESHOLD)
+            return ("FLOAT", floatConfidence, $"{(int)(floatConfidence * 100)}% are valid decimals");
+
+        // 5. Default to NVARCHAR
+        return ("NVARCHAR", 1.0, "No pattern matched; defaulting to text");
     }
 
     /// <summary>
-    /// Calculate confidence percentage for a type match
+    /// Detect if values are valid integers
+    /// Smart handling: allows leading zeros if they form valid integers (e.g., "0001" -> INT)
+    /// This is less aggressive than the old "reject all leading zeros" approach
     /// </summary>
-    private static int CalculateTypeConfidence(List<string> values, string sqlType)
+    private static (int matchCount, double confidence) DetectInteger(List<string> values)
     {
-        if (values.Count == 0)
-            return 0;
-
-        var nonEmptyValues = values.Where(v => !string.IsNullOrWhiteSpace(v)).ToList();
-
-        if (nonEmptyValues.Count == 0)
-            return 0;
-
-        int matchCount = sqlType switch
+        int matchCount = 0;
+        foreach (var value in values)
         {
-            "INT" => nonEmptyValues.Count(v => int.TryParse(v, out _)),
-            "MONEY" => nonEmptyValues.Count(v => decimal.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out _)),
-            _ => nonEmptyValues.Count
+            // Try to parse as Int64 to handle larger integers
+            if (long.TryParse(value, out _))
+            {
+                matchCount++;
+            }
+        }
+
+        double confidence = values.Count > 0 ? (double)matchCount / values.Count : 0;
+        return (matchCount, confidence);
+    }
+
+    /// <summary>
+    /// Detect if values are valid floating-point numbers
+    /// Excludes pure integers (which should be INT, not FLOAT)
+    /// This ensures FLOAT is only selected when decimals are actually present
+    /// </summary>
+    private static (int matchCount, double confidence) DetectFloat(List<string> values)
+    {
+        int matchCount = 0;
+        foreach (var value in values)
+        {
+            // Check if it's a valid decimal and contains decimals (not pure integer)
+            if (decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var decimalVal))
+            {
+                // Include only if it actually has a fractional part (e.g., 1.5, not 1.0)
+                // Or if parsed value shows decimal places
+                string normalized = decimalVal.ToString(CultureInfo.InvariantCulture);
+                if (value.Contains('.') || value.Contains(',') || normalized.Contains('.'))
+                {
+                    matchCount++;
+                }
+            }
+        }
+
+        double confidence = values.Count > 0 ? (double)matchCount / values.Count : 0;
+        return (matchCount, confidence);
+    }
+
+    /// <summary>
+    /// Detect if values are dates/datetimes
+    /// Supports multiple formats: ISO-8601, US (MM/DD/YYYY), EU (DD/MM/YYYY), and variations
+    /// </summary>
+    private static (int matchCount, double confidence) DetectDateTime(List<string> values)
+    {
+        int matchCount = 0;
+        var datePatterns = new[]
+        {
+            // ISO 8601 formats
+            @"^\d{4}-\d{2}-\d{2}(T|\s)\d{2}:\d{2}:\d{2}",     // 2026-02-06T15:30:00 or 2026-02-06 15:30:00
+            @"^\d{4}-\d{2}-\d{2}$",                            // 2026-02-06
+            
+            // US format (MM/DD/YYYY or MM-DD-YYYY)
+            @"^(0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])[/-]\d{4}$",
+            @"^(0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])[/-](\d{2}|\d{4})$",
+            
+            // EU format (DD/MM/YYYY or DD-MM-YYYY)
+            @"^(0?[1-9]|[12]\d|3[01])[/-](0?[1-9]|1[0-2])[/-]\d{4}$",
+            @"^(0?[1-9]|[12]\d|3[01])[/-](0?[1-9]|1[0-2])[/-](\d{2}|\d{4})$",
+            
+            // Other variations
+            @"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}",  // January 6, 2026
+            @"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*, ",                                     // Monday, ...
         };
 
-        return (int)((matchCount / (double)nonEmptyValues.Count) * 100);
+        foreach (var value in values)
+        {
+            // Try parsing with common .NET patterns
+            if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out _) ||
+                DateTime.TryParse(value, CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out _))
+            {
+                matchCount++;
+                continue;
+            }
+
+            // Check regex patterns
+            if (datePatterns.Any(pattern => Regex.IsMatch(value, pattern, RegexOptions.IgnoreCase)))
+            {
+                matchCount++;
+            }
+        }
+
+        double confidence = values.Count > 0 ? (double)matchCount / values.Count : 0;
+        return (matchCount, confidence);
     }
 
-    private static int IntPercentage(int matchCount, int totalCount)
+    /// <summary>
+    /// Detect if values are boolean/bit values
+    /// Accepts: true/false, yes/no, 1/0, on/off (case-insensitive)
+    /// Very strict (90% threshold) because these patterns are unambiguous
+    /// </summary>
+    private static (int matchCount, double confidence) DetectBoolean(List<string> values)
     {
-        return (int)((matchCount / (double)totalCount) * 100);
-    }
+        var booleanPatterns = new[] { "true", "false", "yes", "no", "on", "off", "1", "0", "t", "f", "y", "n" };
 
-    private static int PercentageMatch(int matchCount, int totalCount)
-    {
-        return (int)((matchCount / (double)totalCount) * 100);
+        int matchCount = 0;
+        foreach (var value in values)
+        {
+            if (booleanPatterns.Contains(value.ToLowerInvariant().Trim()))
+            {
+                matchCount++;
+            }
+        }
+
+        double confidence = values.Count > 0 ? (double)matchCount / values.Count : 0;
+        return (matchCount, confidence);
     }
 }

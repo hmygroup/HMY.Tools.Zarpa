@@ -28,6 +28,11 @@ public class DataTableSchema
     public int PrimaryKeyColumnIndex { get; set; } = -1;
     
     /// <summary>
+    /// Allow users to override inferred types before SQL generation
+    /// </summary>
+    public bool AllowUserOverride { get; set; } = true;
+    
+    /// <summary>
     /// Total number of data rows (excluding header)
     /// </summary>
     public int RowCount => DataRows.Count;

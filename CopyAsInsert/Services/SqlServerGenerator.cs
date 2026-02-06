@@ -107,30 +107,42 @@ public class SqlServerGenerator
     }
 
     /// <summary>
-    /// Generate column definition SQL - supports INT, MONEY, and NVARCHAR
+    /// Generate column definition SQL - supports INT, FLOAT, DATETIME2, BIT, and NVARCHAR
     /// </summary>
     private static string GenerateColumnDefinition(ColumnTypeInfo col)
     {
         var def = new StringBuilder();
         def.Append($"[{col.ColumnName}] ");
 
-        // Add SQL type - INT, MONEY, or NVARCHAR
-        if (col.SqlType == "INT")
+        // Add SQL type based on inferred type
+        switch (col.SqlType)
         {
-            def.Append("INT");
-        }
-        else if (col.SqlType == "MONEY")
-        {
-            def.Append("MONEY");
-        }
-        else // NVARCHAR or default
-        {
-            int length = (col.MaxLength.HasValue && col.MaxLength > 0) ? col.MaxLength.Value : 255;
-            // Cap length at reasonable limit, use MAX for very long values
-            if (length > 4000)
-                def.Append("NVARCHAR(MAX)");
-            else
-                def.Append($"NVARCHAR({length})");
+            case "INT":
+                def.Append("INT");
+                break;
+            
+            case "FLOAT":
+                // Use decimal(18,4) for better precision and compatibility
+                def.Append("DECIMAL(18, 4)");
+                break;
+            
+            case "DATETIME2":
+                def.Append("DATETIME2(7)");
+                break;
+            
+            case "BIT":
+                def.Append("BIT");
+                break;
+            
+            case "NVARCHAR":
+            default:
+                int length = (col.MaxLength.HasValue && col.MaxLength > 0) ? col.MaxLength.Value : 255;
+                // Cap length at reasonable limit, use MAX for very long values
+                if (length > 4000)
+                    def.Append("NVARCHAR(MAX)");
+                else
+                    def.Append($"NVARCHAR({length})");
+                break;
         }
 
         // Add NULL constraint
@@ -216,7 +228,7 @@ public class SqlServerGenerator
     }
 
     /// <summary>
-    /// Format a value for SQL based on its type - supports INT, MONEY, NVARCHAR
+    /// Format a value for SQL based on its type - supports INT, FLOAT, DATETIME2, BIT, NVARCHAR
     /// </summary>
     private static string FormatSqlValue(string value, string sqlType)
     {
@@ -230,9 +242,45 @@ public class SqlServerGenerator
         return sqlType switch
         {
             "INT" => int.TryParse(value, out var intVal) ? intVal.ToString() : "NULL",
-            "MONEY" => decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var moneyVal) ? moneyVal.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL",
+            
+            "FLOAT" => decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var floatVal) ? floatVal.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL",
+            
+            "DATETIME2" => FormatDateTimeValue(value),
+            
+            "BIT" => FormatBooleanValue(value),
+            
             _ => $"'{EscapeSqlString(value)}'"  // NVARCHAR or default
         };
+    }
+
+    /// <summary>
+    /// Format a value as a DATETIME2 literal or NULL
+    /// </summary>
+    private static string FormatDateTimeValue(string value)
+    {
+        if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out var dt) ||
+            DateTime.TryParse(value, System.Globalization.CultureInfo.CurrentCulture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out dt))
+        {
+            return $"'{dt:yyyy-MM-dd HH:mm:ss.fffffff}'";
+        }
+        return "NULL";
+    }
+
+    /// <summary>
+    /// Format a value as a BIT literal (0 or 1) or NULL
+    /// </summary>
+    private static string FormatBooleanValue(string value)
+    {
+        var booleanTrue = new[] { "true", "yes", "1", "on", "t", "y" };
+        var booleanFalse = new[] { "false", "no", "0", "off", "f", "n" };
+        
+        string lower = value.ToLowerInvariant().Trim();
+        if (booleanTrue.Contains(lower))
+            return "1";
+        if (booleanFalse.Contains(lower))
+            return "0";
+        
+        return "NULL";
     }
 
     /// <summary>

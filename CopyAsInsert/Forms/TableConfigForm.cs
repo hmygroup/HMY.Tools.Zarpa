@@ -1,7 +1,11 @@
 namespace CopyAsInsert.Forms;
 
+using CopyAsInsert.Models;
+using CopyAsInsert.Services;
+
 /// <summary>
-/// Configuration dialog for table name, schema, and temporal table options
+/// Configuration dialog for table name, schema, temporal table options, and column type overrides
+/// All configuration on a single form with type grid below settings
 /// </summary>
 public partial class TableConfigForm : Form
 {
@@ -9,6 +13,9 @@ public partial class TableConfigForm : Form
     public string SchemaName { get; set; }
     public bool IsTemporalTable { get; set; }
     public bool IsTemporaryTable { get; set; }
+    public DataTableSchema? Schema { get; set; }
+
+    private TypeOverrideControl? _typeOverrideControl;
 
     public TableConfigForm()
     {
@@ -26,20 +33,27 @@ public partial class TableConfigForm : Form
         // Form properties
         this.Text = "SQL Table Configuration";
         this.Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
-        this.Width = 420;
-        this.Height = 310;
+        this.Width = 1000;
+        this.Height = 650;
         this.StartPosition = FormStartPosition.CenterScreen;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
         this.MaximizeBox = false;
         this.MinimizeBox = false;
         this.ShowIcon = true;
 
+        // ============ Top Configuration Panel ============
+        var configPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 150,
+            Padding = new Padding(20)
+        };
+
         // Table Name Label
         var lblTableName = new Label
         {
             Text = "Table Name:",
-            Left = 20,
-            Top = 20,
+            Location = new Point(20, 15),
             Width = 100,
             Height = 20
         };
@@ -48,8 +62,7 @@ public partial class TableConfigForm : Form
         var txtTableName = new TextBox
         {
             Name = "txtTableName",
-            Left = 130,
-            Top = 20,
+            Location = new Point(130, 15),
             Width = 240,
             Height = 20
         };
@@ -58,8 +71,7 @@ public partial class TableConfigForm : Form
         var lblSchema = new Label
         {
             Text = "Schema:",
-            Left = 20,
-            Top = 60,
+            Location = new Point(20, 50),
             Width = 100,
             Height = 20
         };
@@ -68,8 +80,7 @@ public partial class TableConfigForm : Form
         var txtSchema = new TextBox
         {
             Name = "txtSchema",
-            Left = 130,
-            Top = 60,
+            Location = new Point(130, 50),
             Width = 240,
             Height = 20,
             Text = "dbo"
@@ -80,8 +91,7 @@ public partial class TableConfigForm : Form
         {
             Name = "chkTemporal",
             Text = "Create Temporal Table with System Versioning",
-            Left = 20,
-            Top = 100,
+            Location = new Point(20, 85),
             Width = 350,
             Height = 20,
             Checked = false
@@ -92,43 +102,99 @@ public partial class TableConfigForm : Form
         {
             Name = "chkTemporary",
             Text = "Create as Temporary Table (#)",
-            Left = 20,
-            Top = 130,
+            Location = new Point(20, 110),
             Width = 350,
             Height = 20,
             Checked = true
         };
 
-        // Generate Button
+        configPanel.Controls.Add(lblTableName);
+        configPanel.Controls.Add(txtTableName);
+        configPanel.Controls.Add(lblSchema);
+        configPanel.Controls.Add(txtSchema);
+        configPanel.Controls.Add(chkTemporal);
+        configPanel.Controls.Add(chkTemporary);
+
+        // ============ Type Override Control ============
+        _typeOverrideControl = new TypeOverrideControl
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(10)
+        };
+
+        // ============ Column Types Info Label ============
+        var typeInfoPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 50,
+            Padding = new Padding(20, 10, 20, 10),
+            BackColor = SystemColors.Control
+        };
+
+        var lblTypeInfo = new Label
+        {
+            Text = "Review and adjust inferred column types. Columns with <85% confidence are highlighted.",
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
+        typeInfoPanel.Controls.Add(lblTypeInfo);
+
+        // ============ Buttons ============
+        var buttonPanel = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 50,
+            Padding = new Padding(10),
+            BackColor = SystemColors.Control
+        };
+
+        var btnAutoDetect = new Button
+        {
+            Text = "Auto-Detect Types",
+            Location = new Point(10, 10),
+            Width = 120,
+            Height = 30
+        };
+
+        btnAutoDetect.Click += (s, e) =>
+        {
+            if (_typeOverrideControl != null && Schema != null)
+            {
+                TypeInferenceEngine.InferColumnTypes(Schema);
+                _typeOverrideControl.LoadSchema(Schema);
+                MessageBox.Show("Type inference completed. Review the results below.", "Auto-Detect", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        };
+
         var btnGenerate = new Button
         {
             Text = "Generate",
-            Left = 210,
-            Top = 220,
-            Width = 80,
+            Location = new Point(780, 10),
+            Width = 100,
             Height = 30,
             DialogResult = DialogResult.OK
         };
 
-        // Cancel Button
         var btnCancel = new Button
         {
             Text = "Cancel",
-            Left = 300,
-            Top = 220,
-            Width = 80,
+            Location = new Point(890, 10),
+            Width = 100,
             Height = 30,
             DialogResult = DialogResult.Cancel
         };
 
-        this.Controls.Add(lblTableName);
-        this.Controls.Add(txtTableName);
-        this.Controls.Add(lblSchema);
-        this.Controls.Add(txtSchema);
-        this.Controls.Add(chkTemporal);
-        this.Controls.Add(chkTemporary);
-        this.Controls.Add(btnGenerate);
-        this.Controls.Add(btnCancel);
+        buttonPanel.Controls.Add(btnAutoDetect);
+        buttonPanel.Controls.Add(btnGenerate);
+        buttonPanel.Controls.Add(btnCancel);
+
+        // ============ Main Layout ============
+        this.Controls.Add(_typeOverrideControl);      // Fill middle
+        this.Controls.Add(typeInfoPanel);             // Below config
+        this.Controls.Add(buttonPanel);               // Bottom
+        this.Controls.Add(configPanel);               // Top
 
         this.AcceptButton = btnGenerate;
         this.CancelButton = btnCancel;
@@ -142,6 +208,12 @@ public partial class TableConfigForm : Form
                 IsTemporalTable = chkTemporal.Checked;
                 IsTemporaryTable = chkTemporary.Checked;
 
+                // Get modified schema from type override control
+                if (_typeOverrideControl != null)
+                {
+                    Schema = _typeOverrideControl.GetModifiedSchema();
+                }
+
                 if (string.IsNullOrWhiteSpace(TableName))
                 {
                     MessageBox.Show("Table name is required", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -152,4 +224,17 @@ public partial class TableConfigForm : Form
 
         this.ResumeLayout(false);
     }
+
+    /// <summary>
+    /// Set the schema to display in the type override control
+    /// </summary>
+    public void SetSchema(DataTableSchema schema)
+    {
+        Schema = schema;
+        if (_typeOverrideControl != null)
+        {
+            _typeOverrideControl.LoadSchema(schema);
+        }
+    }
 }
+

@@ -238,14 +238,19 @@ public partial class MainForm : Form
             TypeInferenceEngine.InferColumnTypes(schema);
             Logger.LogDebug("Column types inferred");
 
-            // Show config dialog
+            // Show config dialog with schema for type override
             var configForm = new TableConfigForm();
+            configForm.SetSchema(schema);  // Load schema into type override control
+            
             if (configForm.ShowDialog() == DialogResult.OK)
             {
                 Logger.LogInfo($"Config form accepted: TableName={configForm.TableName}, Schema={configForm.SchemaName}");
 
-                // Generate SQL
-                var result = SqlServerGenerator.GenerateSql(schema, configForm.TableName, configForm.SchemaName, configForm.IsTemporalTable, configForm.IsTemporaryTable);
+                // Use the potentially modified schema from config form
+                var finalSchema = configForm.Schema ?? schema;
+
+                // Generate SQL with final schema (including any user-overridden types)
+                var result = SqlServerGenerator.GenerateSql(finalSchema, configForm.TableName, configForm.SchemaName, configForm.IsTemporalTable, configForm.IsTemporaryTable);
 
                 if (result.Success)
                 {
@@ -424,58 +429,27 @@ public partial class MainForm : Form
         {
             if (string.IsNullOrEmpty(result.DownloadUrl) || string.IsNullOrEmpty(result.AvailableVersion))
             {
-                Logger.LogError("Cannot launch update: missing download URL or version");
                 MessageBox.Show("Could not determine update information.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
             _updateChecker ??= new UpdateChecker();
-            var appPath = AppContext.BaseDirectory.TrimEnd('\\');
-            Logger.LogInfo($"=== Update Process Started ===");
-            Logger.LogInfo($"AppContext.BaseDirectory: {appPath}");
-            Logger.LogInfo($"Target version: {result.AvailableVersion}");
-            Logger.LogInfo($"Download URL: {result.DownloadUrl}");
-
-            // Try to find updater with multiple fallback paths
             var updaterPath = _updateChecker.GetUpdaterPath();
-            Logger.LogInfo($"Primary updater path: {updaterPath}");
 
             if (!File.Exists(updaterPath))
             {
-                // Try fallback path: check if we're running from publish folder
-                var fallbackPath = Path.Combine(appPath, "CopyAsInsert.Updater.exe");
-                Logger.LogInfo($"Primary path not found. Trying fallback: {fallbackPath}");
-
-                if (!File.Exists(fallbackPath))
-                {
-                    // Last resort: check in CopyAsInsert subfolder (for organized release structure)
-                    var fallbackPath2 = Path.Combine(appPath, "CopyAsInsert", "CopyAsInsert.Updater.exe");
-                    Logger.LogInfo($"Fallback path not found. Trying organized release path: {fallbackPath2}");
-
-                    if (!File.Exists(fallbackPath2))
-                    {
-                        var errorMsg = $"Updater executable not found in any of these locations:\n" +
-                            $"1. {updaterPath}\n" +
-                            $"2. {fallbackPath}\n" +
-                            $"3. {fallbackPath2}\n\n" +
-                            $"Please download and reinstall the application.";
-                        Logger.LogError(errorMsg);
-                        MessageBox.Show(errorMsg, "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
-                    updaterPath = fallbackPath2;
-                }
-                else
-                {
-                    updaterPath = fallbackPath;
-                }
+                MessageBox.Show($"Updater not found: {updaterPath}\n\nPlease download and reinstall the application.",
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
             }
 
-            Logger.LogInfo($"Using updater at: {updaterPath}");
+            Logger.LogInfo($"Launching updater: {updaterPath}");
+            Logger.LogInfo($"Download URL: {result.DownloadUrl}");
+            Logger.LogInfo($"Version: {result.AvailableVersion}");
 
             // Build arguments for the updater
+            var appPath = AppContext.BaseDirectory.TrimEnd('\\');
             var args = $"--version {result.AvailableVersion} --url \"{result.DownloadUrl}\" --app-path \"{appPath}\"";
-            Logger.LogInfo($"Updater arguments: {args}");
 
             var startInfo = new System.Diagnostics.ProcessStartInfo
             {
@@ -485,9 +459,7 @@ public partial class MainForm : Form
                 CreateNoWindow = false
             };
 
-            Logger.LogInfo($"Launching updater process...");
-            var process = System.Diagnostics.Process.Start(startInfo);
-            Logger.LogInfo($"Updater process started with PID: {process?.Id ?? -1}");
+            System.Diagnostics.Process.Start(startInfo);
 
             // Force immediate exit to release file locks for updater
             Logger.LogInfo("Update approved. Closing application immediately for file replacement.");
@@ -497,7 +469,6 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             Logger.LogError("Error launching update process", ex);
-            Logger.LogError($"Exception details: {ex.GetType().Name}: {ex.Message}");
             MessageBox.Show($"Error starting update:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }

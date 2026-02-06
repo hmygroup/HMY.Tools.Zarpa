@@ -8,14 +8,27 @@ public class ColumnTypeInfo
     public required string ColumnName { get; set; }
     
     /// <summary>
-    /// SQL type: INT, FLOAT, VARCHAR, DATETIME2, BOOL
+    /// SQL type: INT, FLOAT, DATETIME2, BIT, NVARCHAR
     /// </summary>
     public required string SqlType { get; set; }
     
     /// <summary>
-    /// Confidence percentage (0-100) based on lenient matching (70%+ threshold)
+    /// Confidence percentage (0-100) based on type matching
+    /// Represents the percentage of non-empty values matching the inferred type
     /// </summary>
     public int ConfidencePercent { get; set; }
+    
+    /// <summary>
+    /// Precise confidence score as a decimal (0.0-1.0)
+    /// Useful for sorting and detailed analysis
+    /// </summary>
+    public double ConfidenceScore { get; set; }
+    
+    /// <summary>
+    /// Human-readable explanation of why this type was selected
+    /// Examples: "85% of values are valid integers", "ISO date format detected"
+    /// </summary>
+    public string InferenceReason { get; set; } = string.Empty;
     
     /// <summary>
     /// Sample value from the column for preview
@@ -33,7 +46,12 @@ public class ColumnTypeInfo
     public bool AllowNull { get; set; }
     
     /// <summary>
-    /// Maximum length for VARCHAR columns
+    /// Maximum length for NVARCHAR columns
     /// </summary>
     public int? MaxLength { get; set; }
+    
+    /// <summary>
+    /// Supported type options for user override (INT, FLOAT, DATETIME2, BIT, NVARCHAR)
+    /// </summary>
+    public string[] SupportedTypes { get; set; } = new[] { "INT", "FLOAT", "DATETIME2", "BIT", "NVARCHAR" };
 }
