@@ -424,27 +424,58 @@ public partial class MainForm : Form
         {
             if (string.IsNullOrEmpty(result.DownloadUrl) || string.IsNullOrEmpty(result.AvailableVersion))
             {
+                Logger.LogError("Cannot launch update: missing download URL or version");
                 MessageBox.Show("Could not determine update information.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
             _updateChecker ??= new UpdateChecker();
+            var appPath = AppContext.BaseDirectory.TrimEnd('\\');
+            Logger.LogInfo($"=== Update Process Started ===");
+            Logger.LogInfo($"AppContext.BaseDirectory: {appPath}");
+            Logger.LogInfo($"Target version: {result.AvailableVersion}");
+            Logger.LogInfo($"Download URL: {result.DownloadUrl}");
+
+            // Try to find updater with multiple fallback paths
             var updaterPath = _updateChecker.GetUpdaterPath();
+            Logger.LogInfo($"Primary updater path: {updaterPath}");
 
             if (!File.Exists(updaterPath))
             {
-                MessageBox.Show($"Updater not found: {updaterPath}\n\nPlease download and reinstall the application.",
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
+                // Try fallback path: check if we're running from publish folder
+                var fallbackPath = Path.Combine(appPath, "CopyAsInsert.Updater.exe");
+                Logger.LogInfo($"Primary path not found. Trying fallback: {fallbackPath}");
+
+                if (!File.Exists(fallbackPath))
+                {
+                    // Last resort: check in CopyAsInsert subfolder (for organized release structure)
+                    var fallbackPath2 = Path.Combine(appPath, "CopyAsInsert", "CopyAsInsert.Updater.exe");
+                    Logger.LogInfo($"Fallback path not found. Trying organized release path: {fallbackPath2}");
+
+                    if (!File.Exists(fallbackPath2))
+                    {
+                        var errorMsg = $"Updater executable not found in any of these locations:\n" +
+                            $"1. {updaterPath}\n" +
+                            $"2. {fallbackPath}\n" +
+                            $"3. {fallbackPath2}\n\n" +
+                            $"Please download and reinstall the application.";
+                        Logger.LogError(errorMsg);
+                        MessageBox.Show(errorMsg, "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+                    updaterPath = fallbackPath2;
+                }
+                else
+                {
+                    updaterPath = fallbackPath;
+                }
             }
 
-            Logger.LogInfo($"Launching updater: {updaterPath}");
-            Logger.LogInfo($"Download URL: {result.DownloadUrl}");
-            Logger.LogInfo($"Version: {result.AvailableVersion}");
+            Logger.LogInfo($"Using updater at: {updaterPath}");
 
             // Build arguments for the updater
-            var appPath = AppContext.BaseDirectory.TrimEnd('\\');
             var args = $"--version {result.AvailableVersion} --url \"{result.DownloadUrl}\" --app-path \"{appPath}\"";
+            Logger.LogInfo($"Updater arguments: {args}");
 
             var startInfo = new System.Diagnostics.ProcessStartInfo
             {
@@ -454,7 +485,9 @@ public partial class MainForm : Form
                 CreateNoWindow = false
             };
 
-            System.Diagnostics.Process.Start(startInfo);
+            Logger.LogInfo($"Launching updater process...");
+            var process = System.Diagnostics.Process.Start(startInfo);
+            Logger.LogInfo($"Updater process started with PID: {process?.Id ?? -1}");
 
             // Force immediate exit to release file locks for updater
             Logger.LogInfo("Update approved. Closing application immediately for file replacement.");
@@ -464,6 +497,7 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             Logger.LogError("Error launching update process", ex);
+            Logger.LogError($"Exception details: {ex.GetType().Name}: {ex.Message}");
             MessageBox.Show($"Error starting update:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }

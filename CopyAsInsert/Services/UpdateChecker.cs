@@ -95,6 +95,7 @@ namespace CopyAsInsert.Services
                     client.Timeout = TimeSpan.FromSeconds(10);
 
                     Log("Sending HTTP request to GitHub API...");
+                    Log("Note: Request timeout is set to 10 seconds. If this fails, it may indicate slow network connection.");
                     var response = await client.GetAsync(_updateCheckUrl);
                     
                     Log($"HTTP Response Status: {(int)response.StatusCode} ({response.StatusCode})");

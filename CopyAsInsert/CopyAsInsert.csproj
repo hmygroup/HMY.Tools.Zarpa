@@ -59,8 +59,9 @@
     <Copy SourceFiles="$(PublishDir)CopyAsInsert.pdb" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(PublishDir)CopyAsInsert.pdb')" />
     <Copy SourceFiles="$(PublishDir)Group-3.ico" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(PublishDir)Group-3.ico')" />
     
-    <!-- Copy updater executable -->
+    <!-- Copy updater executable to both locations for compatibility -->
     <Copy SourceFiles="$(UpdaterExePath)" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(UpdaterExePath)')" />
+    <Copy SourceFiles="$(UpdaterExePath)" DestinationFolder="$(PublishDir)" Condition="Exists('$(UpdaterExePath)')" />
     
     <!-- Copy documentation and helper scripts -->
     <Copy SourceFiles="$(ReadmePath)" DestinationFolder="$(ReleaseFolder)" Condition="Exists('$(ReadmePath)')" />
