@@ -145,11 +145,8 @@ public class SqlServerGenerator
                 break;
         }
 
-        // Add NULL constraint
-        if (!col.AllowNull)
-            def.Append(" NOT NULL");
-        else
-            def.Append(" NULL");
+        // Always allow NULL for columns
+        def.Append(" NULL");
 
         return def.ToString();
     }
@@ -229,6 +226,7 @@ public class SqlServerGenerator
 
     /// <summary>
     /// Format a value for SQL based on its type - supports INT, FLOAT, DATETIME2, BIT, NVARCHAR
+    /// Handles European decimal format (comma separator) for number types
     /// </summary>
     private static string FormatSqlValue(string value, string sqlType)
     {
@@ -241,9 +239,9 @@ public class SqlServerGenerator
 
         return sqlType switch
         {
-            "INT" => int.TryParse(value, out var intVal) ? intVal.ToString() : "NULL",
+            "INT" => FormatIntValue(value),
             
-            "FLOAT" => decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var floatVal) ? floatVal.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL",
+            "FLOAT" => FormatFloatValue(value),
             
             "DATETIME2" => FormatDateTimeValue(value),
             
@@ -251,6 +249,38 @@ public class SqlServerGenerator
             
             _ => $"'{EscapeSqlString(value)}'"  // NVARCHAR or default
         };
+    }
+
+    /// <summary>
+    /// Format integer value, handling European number format
+    /// </summary>
+    private static string FormatIntValue(string value)
+    {
+        // Remove thousand separators if present
+        string normalized = value.Replace(".", "").Replace(",", "");
+        
+        if (int.TryParse(normalized, out var intVal))
+            return intVal.ToString();
+        
+        // Try as long for larger numbers
+        if (long.TryParse(normalized, out var longVal))
+            return longVal.ToString();
+        
+        return "NULL";
+    }
+
+    /// <summary>
+    /// Format float value, handling European decimal format (comma separator)
+    /// </summary>
+    private static string FormatFloatValue(string value)
+    {
+        // Normalize European format (1,5) to standard format (1.5)
+        string normalized = value.Replace(".", "").Replace(",", ".");
+        
+        if (decimal.TryParse(normalized, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var floatVal))
+            return floatVal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        
+        return "NULL";
     }
 
     /// <summary>
@@ -275,9 +305,13 @@ public class SqlServerGenerator
         var booleanFalse = new[] { "false", "no", "0", "off", "f", "n" };
         
         string lower = value.ToLowerInvariant().Trim();
-        if (booleanTrue.Contains(lower))
+        
+        // Remove any decimal separators for comparison
+        string cleaned = lower.Replace(".", "").Replace(",", "");
+        
+        if (booleanTrue.Contains(cleaned))
             return "1";
-        if (booleanFalse.Contains(lower))
+        if (booleanFalse.Contains(cleaned))
             return "0";
         
         return "NULL";

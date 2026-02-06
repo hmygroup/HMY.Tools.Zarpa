@@ -39,16 +39,16 @@ public class TypeInferenceEngine
             column.InferenceReason = reason;
 
             // Set sample value
-            var nonEmptyValue = values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+            var nonEmptyValue = values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v) && !IsNullRepresentation(v));
             column.SampleValue = nonEmptyValue ?? values.FirstOrDefault() ?? "";
 
-            // Determine if column allows NULL (check for empty/null values)
-            column.AllowNull = values.Any(v => string.IsNullOrWhiteSpace(v) || v.Equals("NULL", StringComparison.OrdinalIgnoreCase));
+            // Determine if column allows NULL (check for empty/null values and common NULL representations)
+            column.AllowNull = values.Any(v => IsNullRepresentation(v));
 
             // Set max length for NVARCHAR
             if (inferredType == "NVARCHAR")
             {
-                var nonEmptyValueLengths = values.Where(v => !string.IsNullOrWhiteSpace(v))
+                var nonEmptyValueLengths = values.Where(v => !string.IsNullOrWhiteSpace(v) && !IsNullRepresentation(v))
                     .Select(v => v.Length)
                     .ToList();
                 
@@ -70,8 +70,7 @@ public class TypeInferenceEngine
             return ("NVARCHAR", 1.0, "No data provided");
 
         // Filter out empty/whitespace-only values for analysis
-        var nonEmptyValues = values.Where(v => !string.IsNullOrWhiteSpace(v) && 
-                                              !v.Equals("NULL", StringComparison.OrdinalIgnoreCase))
+        var nonEmptyValues = values.Where(v => !IsNullRepresentation(v))
                                    .ToList();
 
         if (nonEmptyValues.Count == 0)
@@ -106,13 +105,19 @@ public class TypeInferenceEngine
     /// <summary>
     /// Detect if values are valid integers
     /// Smart handling: allows leading zeros if they form valid integers (e.g., "0001" -> INT)
-    /// This is less aggressive than the old "reject all leading zeros" approach
+    /// Handles European number format with thousand separators
     /// </summary>
     private static (int matchCount, double confidence) DetectInteger(List<string> values)
     {
         int matchCount = 0;
         foreach (var value in values)
         {
+            // Reject values with decimal separators (period or comma)
+            if (value.Contains('.') || value.Contains(','))
+            {
+                continue;
+            }
+
             // Try to parse as Int64 to handle larger integers
             if (long.TryParse(value, out _))
             {
@@ -126,22 +131,33 @@ public class TypeInferenceEngine
 
     /// <summary>
     /// Detect if values are valid floating-point numbers
+    /// Handles both period (.) and comma (,) as decimal separators
     /// Excludes pure integers (which should be INT, not FLOAT)
-    /// This ensures FLOAT is only selected when decimals are actually present
     /// </summary>
     private static (int matchCount, double confidence) DetectFloat(List<string> values)
     {
         int matchCount = 0;
         foreach (var value in values)
         {
-            // Check if it's a valid decimal and contains decimals (not pure integer)
+            // Check if it's a valid decimal with period separator
             if (decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var decimalVal))
             {
                 // Include only if it actually has a fractional part (e.g., 1.5, not 1.0)
-                // Or if parsed value shows decimal places
                 string normalized = decimalVal.ToString(CultureInfo.InvariantCulture);
                 if (value.Contains('.') || value.Contains(',') || normalized.Contains('.'))
                 {
+                    matchCount++;
+                    continue;
+                }
+            }
+
+            // Check if it's a valid decimal with comma separator (European format: 1,5 or 1.234,56)
+            if (value.Contains(','))
+            {
+                string normalizedForComma = value.Replace(".", "").Replace(",", ".");
+                if (decimal.TryParse(normalizedForComma, NumberStyles.Any, CultureInfo.InvariantCulture, out var commaDecimalVal))
+                {
+                    // If it has a comma, it's definitely a decimal (European format)
                     matchCount++;
                 }
             }
@@ -202,15 +218,31 @@ public class TypeInferenceEngine
     /// Detect if values are boolean/bit values
     /// Accepts: true/false, yes/no, 1/0, on/off (case-insensitive)
     /// Very strict (90% threshold) because these patterns are unambiguous
+    /// Does not match values containing decimal separators
     /// </summary>
     private static (int matchCount, double confidence) DetectBoolean(List<string> values)
     {
         var booleanPatterns = new[] { "true", "false", "yes", "no", "on", "off", "1", "0", "t", "f", "y", "n" };
 
+        // If ANY value contains a decimal separator, this column definitely contains numbers, not booleans
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                string trimmed = value.Trim();
+                if (trimmed.Contains('.') || trimmed.Contains(','))
+                {
+                    // Column contains numeric decimals, cannot be boolean
+                    return (0, 0);
+                }
+            }
+        }
+
         int matchCount = 0;
         foreach (var value in values)
         {
-            if (booleanPatterns.Contains(value.ToLowerInvariant().Trim()))
+            string trimmed = value.ToLowerInvariant().Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed) && booleanPatterns.Contains(trimmed))
             {
                 matchCount++;
             }
@@ -218,5 +250,33 @@ public class TypeInferenceEngine
 
         double confidence = values.Count > 0 ? (double)matchCount / values.Count : 0;
         return (matchCount, confidence);
+    }
+
+    /// <summary>
+    /// Check if a value represents NULL (empty string, "NULL" keyword, or other representations)
+    /// </summary>
+    private static bool IsNullRepresentation(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        // Check for explicit NULL keyword (case-insensitive)
+        if (value.Equals("NULL", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Check for variants with different cases
+        string trimmed = value.Trim();
+        if (trimmed.Equals("NULL", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("Null", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("null", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("#N/A", StringComparison.OrdinalIgnoreCase) ||  // Excel error
+            trimmed.Equals("N/A", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("<null>", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("(null)", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 }
