@@ -439,7 +439,7 @@ public partial class MainForm : Form
             Logger.LogInfo($"Version: {result.AvailableVersion}");
 
             // Build arguments for the updater
-            var appPath = AppContext.BaseDirectory;
+            var appPath = AppContext.BaseDirectory.TrimEnd('\\');
             var args = $"--version {result.AvailableVersion} --url \"{result.DownloadUrl}\" --app-path \"{appPath}\"";
 
             var startInfo = new System.Diagnostics.ProcessStartInfo

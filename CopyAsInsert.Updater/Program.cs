@@ -107,7 +107,6 @@ namespace CopyAsInsert.Updater
                         FileName = exePath,
                         UseShellExecute = true,
                         CreateNoWindow = false,
-                        Arguments = "--update-restart"
                     };
                     Process.Start(startInfo);
                     Log("New process started with --update-restart flag");
