@@ -2,6 +2,7 @@ namespace CopyAsInsert.Forms;
 
 using CopyAsInsert.Models;
 using CopyAsInsert.Services;
+using System.Runtime.InteropServices;
 
 /// <summary>
 /// Configuration dialog for table name, schema, temporal table options, and column type overrides
@@ -9,6 +10,9 @@ using CopyAsInsert.Services;
 /// </summary>
 public partial class TableConfigForm : Form
 {
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetForegroundWindow(IntPtr hWnd);
+
     public string TableName { get; set; } = string.Empty;
     public string SchemaName { get; set; }
     public bool IsTemporalTable { get; set; }
@@ -23,6 +27,12 @@ public partial class TableConfigForm : Form
         SchemaName = "dbo";
         IsTemporalTable = false;
         IsTemporaryTable = true;
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        SetForegroundWindow(this.Handle);
     }
 
     private void InitializeComponent()
@@ -40,6 +50,7 @@ public partial class TableConfigForm : Form
         this.MaximizeBox = false;
         this.MinimizeBox = false;
         this.ShowIcon = true;
+        this.TopMost = true;
 
         // ============ Top Configuration Panel ============
         var configPanel = new Panel

@@ -1,6 +1,7 @@
 using CopyAsInsert.Models;
 using CopyAsInsert.Services;
 using CopyAsInsert.Forms;
+using System.Runtime.InteropServices;
 
 namespace CopyAsInsert;
 
@@ -9,6 +10,12 @@ namespace CopyAsInsert;
 /// </summary>
 public partial class MainForm : Form
 {
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetFocus(IntPtr hWnd);
+
     private NotifyIcon? _trayIcon;
     private ContextMenuStrip? _contextMenu;
     private ClipboardInterceptor? _clipboardInterceptor;
@@ -299,7 +306,7 @@ public partial class MainForm : Form
     {
         this.WindowState = FormWindowState.Normal;
         this.Show();
-        this.Activate();
+        SetForegroundWindow(this.Handle);
     }
 
     private void ShowSettings()

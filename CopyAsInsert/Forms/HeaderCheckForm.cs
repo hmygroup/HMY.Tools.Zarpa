@@ -1,15 +1,26 @@
 namespace CopyAsInsert.Forms;
 
+using System.Runtime.InteropServices;
+
 /// <summary>
 /// Dialog to ask user if their data includes header row
 /// </summary>
 public partial class HeaderCheckForm : Form
 {
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetForegroundWindow(IntPtr hWnd);
+
     public bool HasHeaders { get; set; } = true;
 
     public HeaderCheckForm()
     {
         InitializeComponent();
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        SetForegroundWindow(this.Handle);
     }
 
     private void InitializeComponent()
