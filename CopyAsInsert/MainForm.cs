@@ -37,6 +37,10 @@ public partial class MainForm : Form
         _defaultSchema = settings.DefaultSchema;
         _temporalTableByDefault = settings.TemporalTableByDefault;
         _runOnStartup = settings.RunOnStartup;
+        // Load history from file
+        var loadedHistory = HistoryManager.LoadHistory();
+        _conversionHistory.Clear();
+        _conversionHistory.AddRange(loadedHistory);
         // Set up tray icon first
         SetupTrayIcon();
         // Register hotkey after form is fully created and has window handle
@@ -282,6 +286,8 @@ public partial class MainForm : Form
         {
             _conversionHistory.RemoveAt(_conversionHistory.Count - 1);
         }
+        // Save history to file
+        HistoryManager.SaveHistory(_conversionHistory);
     }
 
     private void ShowMainWindow()
@@ -336,14 +342,12 @@ public partial class MainForm : Form
             return;
         }
 
-        var historyText = "Recent Conversions:\r\n\r\n";
-        for (int i = 0; i < _conversionHistory.Count; i++)
+        var historyForm = new HistoryForm(_conversionHistory);
+        if (historyForm.ShowDialog() == DialogResult.OK)
         {
-            var result = _conversionHistory[i];
-            historyText += $"{i + 1}. {result.Summary} - {result.ConversionTime:g}\r\n";
+            // History may have been modified (items deleted), save it
+            HistoryManager.SaveHistory(_conversionHistory);
         }
-
-        MessageBox.Show(historyText, "Conversion History", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private async void CheckForUpdatesAsync()
