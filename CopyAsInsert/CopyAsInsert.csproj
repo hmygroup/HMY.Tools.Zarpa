@@ -11,10 +11,10 @@
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ApplicationIcon>Group-3.ico</ApplicationIcon>
-    <Version>2.1.3</Version>
-    <AssemblyVersion>2.1.3.0</AssemblyVersion>
-    <FileVersion>2.1.3.0</FileVersion>
-    <InformationalVersion>2.1.3</InformationalVersion>
+    <Version>2.1.4</Version>
+    <AssemblyVersion>2.1.4.0</AssemblyVersion>
+    <FileVersion>2.1.4.0</FileVersion>
+    <InformationalVersion>2.1.4</InformationalVersion>
     <ProductName>CopyAsInsert</ProductName>
     <CompanyName>HMY Group</CompanyName>
   </PropertyGroup>
