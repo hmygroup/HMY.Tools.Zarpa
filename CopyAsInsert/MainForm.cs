@@ -168,7 +168,7 @@ public partial class MainForm : Form
         _trayIcon.DoubleClick += (s, e) => ShowMainWindow();
         
         // Show that tray icon is ready
-        _trayIcon.ShowBalloonTip(1500, "ZARPA", "Starting...", ToolTipIcon.Info);
+        // _trayIcon.ShowBalloonTip(1500, "ZARPA", "Starting...", ToolTipIcon.Info);
     }
 
     private void SetupHotkey()
@@ -187,14 +187,14 @@ public partial class MainForm : Form
             Logger.LogInfo("Hotkey Alt+Shift+I registered successfully");
             
             // Show confirmation
-            if (_trayIcon != null)
-                _trayIcon.ShowBalloonTip(2000, "Ready", "Alt+Shift+I registered successfully", ToolTipIcon.Info);
+            // if (_trayIcon != null)
+            //     _trayIcon.ShowBalloonTip(2000, "Ready", "Alt+Shift+I registered successfully", ToolTipIcon.Info);
         }
         catch (Exception ex)
         {
             Logger.LogError("Failed to register hotkey", ex);
-            if (_trayIcon != null)
-                _trayIcon.ShowBalloonTip(3000, "Error", $"Hotkey registration failed: {ex.Message}", ToolTipIcon.Error);
+            // if (_trayIcon != null)
+            //     _trayIcon.ShowBalloonTip(3000, "Error", $"Hotkey registration failed: {ex.Message}", ToolTipIcon.Error);
         }
     }
 
@@ -219,7 +219,7 @@ public partial class MainForm : Form
             if (string.IsNullOrEmpty(clipboardText) || !ClipboardInterceptor.IsClipboardTabularData())
             {
                 Logger.LogInfo("Clipboard does not contain tabular data");
-                _trayIcon?.ShowBalloonTip(2000, "No Table Data", "Clipboard does not contain tabular data (TSV/CSV)", ToolTipIcon.Info);
+                // _trayIcon?.ShowBalloonTip(2000, "No Table Data", "Clipboard does not contain tabular data (TSV/CSV)", ToolTipIcon.Info);
                 return;
             }
 
@@ -287,7 +287,7 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             Logger.LogError("Error processing clipboard", ex);
-            _trayIcon?.ShowBalloonTip(3000, "Error", $"Error processing clipboard: {ex.Message}", ToolTipIcon.Error);
+            // _trayIcon?.ShowBalloonTip(3000, "Error", $"Error processing clipboard: {ex.Message}", ToolTipIcon.Error);
         }
     }
 
