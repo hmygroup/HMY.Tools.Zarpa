@@ -26,6 +26,10 @@ public partial class MainForm : Form
     private string _defaultSchema = "dbo";
     private bool _temporalTableByDefault = true;
     private bool _runOnStartup = false;
+    private bool _autoAppendTemporalSuffix = false;
+    private bool _showFormOnStartup = false;
+    private int _hotKeyModifier = 0x0001 | 0x0004; // MOD_ALT | MOD_SHIFT
+    private int _hotKeyVirtualKey = 0x49; // 'I'
     private bool _hotkeyRegistered = false;
 
     public MainForm()
@@ -44,6 +48,10 @@ public partial class MainForm : Form
         _defaultSchema = settings.DefaultSchema;
         _temporalTableByDefault = settings.TemporalTableByDefault;
         _runOnStartup = settings.RunOnStartup;
+        _autoAppendTemporalSuffix = settings.AutoAppendTemporalSuffix;
+        _showFormOnStartup = settings.ShowFormOnStartup;
+        _hotKeyModifier = settings.HotKeyModifier;
+        _hotKeyVirtualKey = settings.HotKeyVirtualKey;
         // Load history from file
         var loadedHistory = HistoryManager.LoadHistory();
         _conversionHistory.Clear();
@@ -54,9 +62,18 @@ public partial class MainForm : Form
         SetupHotkey();
         // Check for updates asynchronously
         CheckForUpdatesAsync();
-        // Now hide the form (it stays in message loop but invisible)
-        this.WindowState = FormWindowState.Minimized;
-        this.Hide();
+        // Show or hide the form based on settings
+        if (_showFormOnStartup)
+        {
+            this.WindowState = FormWindowState.Normal;
+            this.Show();
+            SetForegroundWindow(this.Handle);
+        }
+        else
+        {
+            this.WindowState = FormWindowState.Minimized;
+            this.Hide();
+        }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -144,7 +161,7 @@ public partial class MainForm : Form
         {
             Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application,
             Visible = true,
-            Text = "ZARPA - Alt+Shift+I"
+            Text = $"ZARPA - {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}"
         };
 
         _contextMenu = new ContextMenuStrip();
@@ -171,6 +188,34 @@ public partial class MainForm : Form
         // _trayIcon.ShowBalloonTip(1500, "ZARPA", "Starting...", ToolTipIcon.Info);
     }
 
+    private string FormatHotkey(int modifiers, int vKey)
+    {
+        var keys = new List<string>();
+
+        if ((modifiers & 0x0002) != 0) // MOD_CTRL
+            keys.Add("Ctrl");
+        if ((modifiers & 0x0001) != 0) // MOD_ALT
+            keys.Add("Alt");
+        if ((modifiers & 0x0004) != 0) // MOD_SHIFT
+            keys.Add("Shift");
+
+        // Convert virtual key to character
+        if (vKey >= 0x41 && vKey <= 0x5A) // A-Z
+        {
+            keys.Add(((char)vKey).ToString());
+        }
+        else if (vKey >= 0x30 && vKey <= 0x39) // 0-9
+        {
+            keys.Add(((char)vKey).ToString());
+        }
+        else
+        {
+            keys.Add($"0x{vKey:X}");
+        }
+
+        return string.Join("+", keys);
+    }
+
     private void SetupHotkey()
     {
         if (_hotkeyRegistered)
@@ -181,20 +226,34 @@ public partial class MainForm : Form
 
         try
         {
-            _clipboardInterceptor.InitializeHotKey(this.Handle);
+            _clipboardInterceptor.InitializeHotKey(this.Handle, _hotKeyModifier, _hotKeyVirtualKey);
             _hotkeyRegistered = true;
             
-            Logger.LogInfo("Hotkey Alt+Shift+I registered successfully");
+            Logger.LogInfo($"Hotkey {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)} registered successfully");
             
             // Show confirmation
             // if (_trayIcon != null)
-            //     _trayIcon.ShowBalloonTip(2000, "Ready", "Alt+Shift+I registered successfully", ToolTipIcon.Info);
+            //     _trayIcon.ShowBalloonTip(2000, "Ready", "Hotkey registered successfully", ToolTipIcon.Info);
         }
         catch (Exception ex)
         {
             Logger.LogError("Failed to register hotkey", ex);
-            // if (_trayIcon != null)
-            //     _trayIcon.ShowBalloonTip(3000, "Error", $"Hotkey registration failed: {ex.Message}", ToolTipIcon.Error);
+            // Try to fall back to Alt+Shift+I
+            try
+            {
+                Logger.LogInfo("Attempting fallback to Alt+Shift+I...");
+                _clipboardInterceptor.InitializeHotKey(this.Handle, ClipboardInterceptor.MOD_ALT | ClipboardInterceptor.MOD_SHIFT, 0x49);
+                _hotkeyRegistered = true;
+                _hotKeyModifier = ClipboardInterceptor.MOD_ALT | ClipboardInterceptor.MOD_SHIFT;
+                _hotKeyVirtualKey = 0x49;
+                Logger.LogInfo("Fallback hotkey Alt+Shift+I registered successfully");
+            }
+            catch (Exception ex2)
+            {
+                Logger.LogError("Failed to register fallback hotkey", ex2);
+                // if (_trayIcon != null)
+                //     _trayIcon.ShowBalloonTip(3000, "Error", $"Hotkey registration failed: {ex2.Message}", ToolTipIcon.Error);
+            }
         }
     }
 
@@ -246,7 +305,7 @@ public partial class MainForm : Form
             Logger.LogDebug("Column types inferred");
 
             // Show config dialog with schema for type override
-            var configForm = new TableConfigForm();
+            var configForm = new TableConfigForm(_defaultSchema, _temporalTableByDefault);
             configForm.SetSchema(schema);  // Load schema into type override control
             
             if (configForm.ShowDialog() == DialogResult.OK)
@@ -257,7 +316,7 @@ public partial class MainForm : Form
                 var finalSchema = configForm.Schema ?? schema;
 
                 // Generate SQL with final schema (including any user-overridden types)
-                var result = SqlServerGenerator.GenerateSql(finalSchema, configForm.TableName, configForm.SchemaName, configForm.IsTemporalTable, configForm.IsTemporaryTable);
+                var result = SqlServerGenerator.GenerateSql(finalSchema, configForm.TableName, configForm.SchemaName, configForm.IsTemporalTable, configForm.IsTemporaryTable, _autoAppendTemporalSuffix);
 
                 if (result.Success)
                 {
@@ -315,7 +374,11 @@ public partial class MainForm : Form
         {
             DefaultSchema = _defaultSchema,
             TemporalTableByDefault = _temporalTableByDefault,
-            RunOnStartup = _runOnStartup
+            RunOnStartup = _runOnStartup,
+            AutoAppendTemporalSuffix = _autoAppendTemporalSuffix,
+            ShowFormOnStartup = _showFormOnStartup,
+            HotKeyModifier = _hotKeyModifier,
+            HotKeyVirtualKey = _hotKeyVirtualKey
         };
 
         if (settingsForm.ShowDialog() == DialogResult.OK)
@@ -323,6 +386,11 @@ public partial class MainForm : Form
             _defaultSchema = settingsForm.DefaultSchema;
             _temporalTableByDefault = settingsForm.TemporalTableByDefault;
             _runOnStartup = settingsForm.RunOnStartup;
+            _autoAppendTemporalSuffix = settingsForm.AutoAppendTemporalSuffix;
+            _showFormOnStartup = settingsForm.ShowFormOnStartup;
+
+            bool hotkeyChanged = _hotKeyModifier != settingsForm.HotKeyModifier || 
+                                _hotKeyVirtualKey != settingsForm.HotKeyVirtualKey;
 
             // Save settings to file
             var settings = new SettingsManager.ApplicationSettings
@@ -330,9 +398,45 @@ public partial class MainForm : Form
                 DefaultSchema = _defaultSchema,
                 AutoCreateHistoryTable = true, // This wasn't being used, keeping as default
                 TemporalTableByDefault = _temporalTableByDefault,
-                RunOnStartup = _runOnStartup
+                RunOnStartup = _runOnStartup,
+                AutoAppendTemporalSuffix = _autoAppendTemporalSuffix,
+                ShowFormOnStartup = _showFormOnStartup,
+                HotKeyModifier = settingsForm.HotKeyModifier,
+                HotKeyVirtualKey = settingsForm.HotKeyVirtualKey
             };
             SettingsManager.SaveSettings(settings);
+
+            // Update hotkey if it changed
+            if (hotkeyChanged && _clipboardInterceptor != null)
+            {
+                _hotKeyModifier = settingsForm.HotKeyModifier;
+                _hotKeyVirtualKey = settingsForm.HotKeyVirtualKey;
+
+                bool hotkeyUpdated = _clipboardInterceptor.UpdateHotKey(_hotKeyModifier, _hotKeyVirtualKey);
+
+                if (!hotkeyUpdated)
+                {
+                    MessageBox.Show(
+                        $"Could not update hotkey to {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}.\n\n" +
+                        "It may be in use by another application. Please try a different combination.",
+                        "Hotkey Registration Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+
+                    // Revert to previous settings in file
+                    settings.HotKeyModifier = _hotKeyModifier;
+                    settings.HotKeyVirtualKey = _hotKeyVirtualKey;
+                }
+                else
+                {
+                    // Update tray icon text
+                    if (_trayIcon != null)
+                    {
+                        _trayIcon.Text = $"ZARPA - {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}";
+                    }
+                    Logger.LogInfo($"Hotkey updated to {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}");
+                }
+            }
 
             // Update Registry for startup
             if (_runOnStartup)

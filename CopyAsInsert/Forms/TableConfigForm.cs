@@ -20,12 +20,24 @@ public partial class TableConfigForm : Form
     public DataTableSchema? Schema { get; set; }
 
     private TypeOverrideControl? _typeOverrideControl;
+    private string _defaultSchema = "dbo";
+    private bool _temporalByDefault = false;
 
     public TableConfigForm()
     {
         InitializeComponent();
-        SchemaName = "dbo";
-        IsTemporalTable = false;
+        SchemaName = _defaultSchema;
+        IsTemporalTable = _temporalByDefault;
+        IsTemporaryTable = true;
+    }
+
+    public TableConfigForm(string defaultSchema, bool temporalByDefault)
+    {
+        _defaultSchema = defaultSchema;
+        _temporalByDefault = temporalByDefault;
+        InitializeComponent();
+        SchemaName = _defaultSchema;
+        IsTemporalTable = _temporalByDefault;
         IsTemporaryTable = true;
     }
 
@@ -94,7 +106,7 @@ public partial class TableConfigForm : Form
             Location = new Point(130, 50),
             Width = 240,
             Height = 20,
-            Text = "dbo"
+            Text = _defaultSchema
         };
 
         // Temporal Table Checkbox
@@ -105,7 +117,7 @@ public partial class TableConfigForm : Form
             Location = new Point(20, 85),
             Width = 350,
             Height = 20,
-            Checked = false
+            Checked = _temporalByDefault
         };
 
         // Temporary Table Checkbox

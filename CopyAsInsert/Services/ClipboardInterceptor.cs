@@ -7,10 +7,11 @@ namespace CopyAsInsert.Services;
 /// </summary>
 public class ClipboardInterceptor : IDisposable
 {
-    private const int MOD_ALT = 0x0001;
-    private const int MOD_SHIFT = 0x0004;
-    private const int WM_HOTKEY = 0x0312;
-    private const int HOTKEY_ID = 9000;
+    public const int MOD_ALT = 0x0001;
+    public const int MOD_SHIFT = 0x0004;
+    public const int MOD_CTRL = 0x0002;
+    public const int WM_HOTKEY = 0x0312;
+    public const int HOTKEY_ID = 9000;
 
     [DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vk);
@@ -22,27 +23,97 @@ public class ClipboardInterceptor : IDisposable
     private static extern IntPtr GetForegroundWindow();
 
     private IntPtr _windowHandle;
+    private int _currentModifier;
+    private int _currentVirtualKey;
     private bool _isRegistered = false;
 
     /// <summary>
-    /// Event fired when Alt+Shift+I hotkey is pressed
+    /// Event fired when hotkey is pressed
     /// </summary>
     public event EventHandler<EventArgs>? HotKeyPressed;
 
     /// <summary>
-    /// Initialize hotkey listener for the given window
+    /// Initialize hotkey listener for the given window with default Alt+Shift+I
     /// </summary>
     public void InitializeHotKey(IntPtr windowHandle)
     {
-        _windowHandle = windowHandle;
+        InitializeHotKey(windowHandle, MOD_ALT | MOD_SHIFT, 0x49);
+    }
 
-        // Alt+Shift+I: I = 0x49
-        _isRegistered = RegisterHotKey(windowHandle, HOTKEY_ID, MOD_ALT | MOD_SHIFT, 0x49);
+    /// <summary>
+    /// Initialize hotkey listener with custom modifier and virtual key
+    /// </summary>
+    public void InitializeHotKey(IntPtr windowHandle, int modifiers, int virtualKey)
+    {
+        _windowHandle = windowHandle;
+        _currentModifier = modifiers;
+        _currentVirtualKey = virtualKey;
+
+        _isRegistered = RegisterHotKey(windowHandle, HOTKEY_ID, modifiers, virtualKey);
 
         if (!_isRegistered)
         {
-            throw new InvalidOperationException("Failed to register hotkey Alt+Shift+I. It may be in use by another application.");
+            throw new InvalidOperationException($"Failed to register hotkey. It may be in use by another application (Modifiers: 0x{modifiers:X}, VKey: 0x{virtualKey:X}).");
         }
+    }
+
+    /// <summary>
+    /// Update hotkey to new configuration, unregistering the old one first
+    /// </summary>
+    public bool UpdateHotKey(int modifiers, int virtualKey)
+    {
+        // Unregister old hotkey if it was registered
+        if (_isRegistered && _windowHandle != IntPtr.Zero)
+        {
+            UnregisterHotKey(_windowHandle, HOTKEY_ID);
+            _isRegistered = false;
+        }
+
+        // Try to register with new hotkey
+        if (_windowHandle != IntPtr.Zero)
+        {
+            _isRegistered = RegisterHotKey(_windowHandle, HOTKEY_ID, modifiers, virtualKey);
+
+            if (_isRegistered)
+            {
+                _currentModifier = modifiers;
+                _currentVirtualKey = virtualKey;
+                return true;
+            }
+            else
+            {
+                // If registration failed, try to restore the old hotkey
+                if (_currentModifier != modifiers || _currentVirtualKey != virtualKey)
+                {
+                    RegisterHotKey(_windowHandle, HOTKEY_ID, _currentModifier, _currentVirtualKey);
+                    _isRegistered = true;
+                }
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Get current hotkey configuration as formatted string (e.g., "Ctrl+Alt+P")
+    /// </summary>
+    public string GetCurrentHotKeyString()
+    {
+        var keys = new List<string>();
+        
+        if ((_currentModifier & MOD_CTRL) != 0)
+            keys.Add("Ctrl");
+        if ((_currentModifier & MOD_ALT) != 0)
+            keys.Add("Alt");
+        if ((_currentModifier & MOD_SHIFT) != 0)
+            keys.Add("Shift");
+
+        // Convert virtual key to character
+        string keyChar = ((char)_currentVirtualKey).ToString().ToUpper();
+        keys.Add(keyChar);
+
+        return string.Join("+", keys);
     }
 
     /// <summary>

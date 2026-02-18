@@ -11,7 +11,7 @@ public class SqlServerGenerator
     /// <summary>
     /// Generate CREATE TABLE and INSERT statements for temporal table
     /// </summary>
-    public static ConversionResult GenerateSql(DataTableSchema schema, string tableName, string schema_name, bool isTemporalTable, bool isTemporaryTable = false)
+    public static ConversionResult GenerateSql(DataTableSchema schema, string tableName, string schema_name, bool isTemporalTable, bool isTemporaryTable = false, bool autoAppendTemporalSuffix = false)
     {
         var result = new ConversionResult
         {
@@ -27,12 +27,12 @@ public class SqlServerGenerator
             var sql = new StringBuilder();
 
             // Generate CREATE TABLE statement
-            sql.Append(GenerateCreateTableStatement(schema, tableName, schema_name, isTemporalTable, isTemporaryTable));
+            sql.Append(GenerateCreateTableStatement(schema, tableName, schema_name, isTemporalTable, isTemporaryTable, autoAppendTemporalSuffix));
             sql.AppendLine();
             sql.AppendLine();
 
             // Generate INSERT statements (one per row)
-            sql.Append(GenerateInsertStatements(schema, tableName, schema_name, isTemporaryTable));
+            sql.Append(GenerateInsertStatements(schema, tableName, schema_name, isTemporaryTable, autoAppendTemporalSuffix));
 
             result.GeneratedSql = sql.ToString();
             result.Success = true;
@@ -49,23 +49,26 @@ public class SqlServerGenerator
     /// <summary>
     /// Generate CREATE TABLE statement with temporal table features
     /// </summary>
-    private static string GenerateCreateTableStatement(DataTableSchema schema, string tableName, string schema_name, bool isTemporalTable, bool isTemporaryTable = false)
+    private static string GenerateCreateTableStatement(DataTableSchema schema, string tableName, string schema_name, bool isTemporalTable, bool isTemporaryTable = false, bool autoAppendTemporalSuffix = false)
     {
         var sb = new StringBuilder();
 
         string fullTableName;
         string historyTableName;
 
+        // Determine table name suffix based on settings
+        string suffix = (isTemporalTable && autoAppendTemporalSuffix) ? "_Temporal" : "";
+
         if (isTemporaryTable)
         {
             // Session-scoped temporary table uses # prefix
-            fullTableName = $"[#{tableName}_Temporal]";
+            fullTableName = $"[#{tableName}{suffix}]";
             historyTableName = $"[#{tableName}_History]";
         }
         else
         {
             // Regular table uses schema
-            fullTableName = $"[{schema_name}].[{tableName}_Temporal]";
+            fullTableName = $"[{schema_name}].[{tableName}{suffix}]";
             historyTableName = $"[{schema_name}].[{tableName}_History]";
         }
 
@@ -156,19 +159,22 @@ public class SqlServerGenerator
     /// Includes ALL columns - no exclusions
     /// Must match the table name used in CREATE TABLE
     /// </summary>
-    private static string GenerateInsertStatements(DataTableSchema schema, string tableName, string schema_name, bool isTemporaryTable = false)
+    private static string GenerateInsertStatements(DataTableSchema schema, string tableName, string schema_name, bool isTemporaryTable = false, bool autoAppendTemporalSuffix = false)
     {
         var sb = new StringBuilder();
 
         // Table name must match CREATE TABLE exactly
+        // Use the same suffix logic as CREATE TABLE
+        string suffix = autoAppendTemporalSuffix ? "_Temporal" : "";
+        
         string fullTableName;
         if (isTemporaryTable)
         {
-            fullTableName = $"[#{tableName}_Temporal]";
+            fullTableName = $"[#{tableName}{suffix}]";
         }
         else
         {
-            fullTableName = $"[{schema_name}].[{tableName}_Temporal]";
+            fullTableName = $"[{schema_name}].[{tableName}{suffix}]";
         }
         
         // Build column list - ALL columns, no skipping

@@ -22,6 +22,10 @@ public class SettingsManager
         public bool AutoCreateHistoryTable { get; set; } = true;
         public bool TemporalTableByDefault { get; set; } = true;
         public bool RunOnStartup { get; set; } = false;
+        public int HotKeyModifier { get; set; } = 0x0001 | 0x0004; // MOD_ALT | MOD_SHIFT
+        public int HotKeyVirtualKey { get; set; } = 0x49; // 'I'
+        public bool AutoAppendTemporalSuffix { get; set; } = false; // Control "_Temporal" suffix
+        public bool ShowFormOnStartup { get; set; } = false; // Show main form on startup
     }
 
     /// <summary>
