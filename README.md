@@ -15,6 +15,14 @@ The app will launch and minimize to the system tray.
 
 ### Usage Workflow
 
+#### Quick Mode (Recommended for Prototyping)
+
+1. **Copy Excel Data**: Select and copy a table from Excel (Ctrl+C)
+2. **Press Alt+Shift+O**: Instantly generates `#temp` table - no dialogs!
+3. **Paste into SSMS**: SQL is on clipboard, ready to execute
+
+#### Standard Mode (Full Control)
+
 1. **Copy Excel Data**: Select and copy a table from Excel (Ctrl+C)
    - Supports both tab-separated (TSV) and comma-separated (CSV) formats
    - Minimum: 1 header row + 1 data row
@@ -36,6 +44,7 @@ The app will launch and minimize to the system tray.
 
 ### Features
 
+- **Quick Mode (Alt+Shift+O)**: Instant `#temp` table generation - no prompts, all NVARCHAR(100)
 - **Auto Type Detection**: INT, FLOAT, DATETIME2, BIT, VARCHAR (70% lenient matching)
 - **Primary Key Detection**: Auto-detects first INT or ID-named column as identity PK
 - **Temporal Tables**: Includes SysStartTime/SysEndTime with system versioning enabled
@@ -45,8 +54,19 @@ The app will launch and minimize to the system tray.
 
 ### Hotkey Details
 
-- **Default Hotkey**: Alt+Shift+I
-- **Why This Key**: Non-intrusive, unlikely to conflict with other apps
+- **Standard Mode**: Alt+Shift+I
+  - Opens configuration dialog for full customization
+  - Allows table naming, schema selection, type overrides, temporal table options
+  - Best for production use where you need control over the generated SQL
+
+- **Quick Mode**: Alt+Shift+O (NEW in v2.2.0)
+  - **No prompts** - instantly generates SQL without any dialogs
+  - Creates temporary table `#temp` with all columns as `NVARCHAR(100)`
+  - Perfect for rapid prototyping and quick data exploration
+  - Assumes first row contains headers
+  - No temporal table features (pure temporary table)
+
+- **Why These Keys**: Non-intrusive, unlikely to conflict with other apps
 - **When Available**: Global - works even when other windows are active
 
 ### Generated SQL
