@@ -12,6 +12,7 @@ public class ClipboardInterceptor : IDisposable
     public const int MOD_CTRL = 0x0002;
     public const int WM_HOTKEY = 0x0312;
     public const int HOTKEY_ID = 9000;
+    public const int QUICK_MODE_HOTKEY_ID = 9001;
 
     [DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vk);
@@ -26,6 +27,7 @@ public class ClipboardInterceptor : IDisposable
     private int _currentModifier;
     private int _currentVirtualKey;
     private bool _isRegistered = false;
+    private bool _isQuickModeRegistered = false;
 
     /// <summary>
     /// Event fired when hotkey is pressed
@@ -33,11 +35,17 @@ public class ClipboardInterceptor : IDisposable
     public event EventHandler<EventArgs>? HotKeyPressed;
 
     /// <summary>
+    /// Event fired when quick mode hotkey (Alt+Shift+O) is pressed
+    /// </summary>
+    public event EventHandler<EventArgs>? QuickModeHotKeyPressed;
+
+    /// <summary>
     /// Initialize hotkey listener for the given window with default Alt+Shift+I
     /// </summary>
     public void InitializeHotKey(IntPtr windowHandle)
     {
         InitializeHotKey(windowHandle, MOD_ALT | MOD_SHIFT, 0x49);
+        InitializeQuickModeHotKey(windowHandle);
     }
 
     /// <summary>
@@ -117,13 +125,38 @@ public class ClipboardInterceptor : IDisposable
     }
 
     /// <summary>
+    /// Initialize quick mode hotkey (Alt+Shift+O) - always registered and cannot be changed
+    /// </summary>
+    public void InitializeQuickModeHotKey(IntPtr windowHandle)
+    {
+        if (_isQuickModeRegistered)
+            return;
+
+        _isQuickModeRegistered = RegisterHotKey(windowHandle, QUICK_MODE_HOTKEY_ID, MOD_ALT | MOD_SHIFT, 0x4F); // 0x4F = 'O'
+
+        if (!_isQuickModeRegistered)
+        {
+            // Quick mode hotkey registration is optional - log but don't throw
+            System.Diagnostics.Debug.WriteLine("Failed to register quick mode hotkey Alt+Shift+O. It may be in use by another application.");
+        }
+    }
+
+    /// <summary>
     /// Call this from your form's WndProc to handle hotkey messages
     /// </summary>
     public void ProcessWindowMessage(ref Message m)
     {
-        if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HOTKEY_ID)
+        if (m.Msg == WM_HOTKEY)
         {
-            HotKeyPressed?.Invoke(this, EventArgs.Empty);
+            int hotkeyId = m.WParam.ToInt32();
+            if (hotkeyId == HOTKEY_ID)
+            {
+                HotKeyPressed?.Invoke(this, EventArgs.Empty);
+            }
+            else if (hotkeyId == QUICK_MODE_HOTKEY_ID)
+            {
+                QuickModeHotKeyPressed?.Invoke(this, EventArgs.Empty);
+            }
         }
     }
 
@@ -198,6 +231,12 @@ public class ClipboardInterceptor : IDisposable
         {
             UnregisterHotKey(_windowHandle, HOTKEY_ID);
             _isRegistered = false;
+        }
+
+        if (_isQuickModeRegistered && _windowHandle != IntPtr.Zero)
+        {
+            UnregisterHotKey(_windowHandle, QUICK_MODE_HOTKEY_ID);
+            _isQuickModeRegistered = false;
         }
     }
 }

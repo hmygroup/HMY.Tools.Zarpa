@@ -223,6 +223,7 @@ public partial class MainForm : Form
 
         _clipboardInterceptor = new ClipboardInterceptor();
         _clipboardInterceptor.HotKeyPressed += OnHotKeyPressed;
+        _clipboardInterceptor.QuickModeHotKeyPressed += OnQuickModeHotKeyPressed;
 
         try
         {
@@ -347,6 +348,77 @@ public partial class MainForm : Form
         {
             Logger.LogError("Error processing clipboard", ex);
             // _trayIcon?.ShowBalloonTip(3000, "Error", $"Error processing clipboard: {ex.Message}", ToolTipIcon.Error);
+        }
+    }
+
+    private void OnQuickModeHotKeyPressed(object? sender, EventArgs e)
+    {
+        ProcessClipboardQuickMode();
+    }
+
+    private void ProcessClipboardQuickMode()
+    {
+        try
+        {
+            Logger.LogDebug("ProcessClipboardQuickMode started");
+            var clipboardText = ClipboardInterceptor.GetClipboardText();
+
+            if (string.IsNullOrEmpty(clipboardText) || !ClipboardInterceptor.IsClipboardTabularData())
+            {
+                Logger.LogInfo("Quick mode: Clipboard does not contain tabular data");
+                return;
+            }
+
+            Logger.LogDebug("Quick mode: Clipboard contains tabular data");
+
+            // Parse clipboard data - assume headers are present
+            var schema = TableDataParser.ParseClipboardText(clipboardText, hasHeaders: true);
+            Logger.LogInfo($"Quick mode: Clipboard parsed successfully: {schema.Columns.Count} columns, {schema.DataRows.Count} rows");
+
+            // Override all column types to NVARCHAR(100)
+            foreach (var column in schema.Columns)
+            {
+                column.SqlType = "NVARCHAR";
+                column.MaxLength = 100;
+            }
+            Logger.LogDebug("Quick mode: All columns set to NVARCHAR(100)");
+
+            // Generate SQL with fixed settings:
+            // - Table name: "temp"
+            // - Schema: "dbo" (not used for temp tables)
+            // - Temporal table: false
+            // - Temporary table: true (will create #temp)
+            var result = SqlServerGenerator.GenerateSql(
+                schema,
+                tableName: "temp",
+                schema_name: "dbo",
+                isTemporalTable: false,
+                isTemporaryTable: true,
+                autoAppendTemporalSuffix: false);
+
+            if (result.Success)
+            {
+                Logger.LogInfo($"Quick mode: SQL generated successfully: {result.Summary}");
+
+                // Copy SQL to clipboard
+                ClipboardInterceptor.SetClipboardText(result.GeneratedSql);
+
+                // Add to history
+                AddToHistory(result);
+
+                // Show success notification
+                var message = $"Quick mode: #temp created\n{result.RowCount} rows";
+                _trayIcon?.ShowBalloonTip(2000, "Success", message, ToolTipIcon.Info);
+            }
+            else
+            {
+                Logger.LogError($"Quick mode: SQL generation failed: {result.ErrorMessage}");
+                _trayIcon?.ShowBalloonTip(3000, "Error", $"Quick mode failed: {result.ErrorMessage}", ToolTipIcon.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("Error in quick mode processing", ex);
         }
     }
 
