@@ -8,7 +8,7 @@ public class ColumnTypeInfo
     public required string ColumnName { get; set; }
     
     /// <summary>
-    /// SQL type: INT, FLOAT, DATETIME2, BIT, NVARCHAR
+    /// SQL type: INT, FLOAT, DATETIME2, NVARCHAR
     /// </summary>
     public required string SqlType { get; set; }
     
@@ -51,7 +51,7 @@ public class ColumnTypeInfo
     public int? MaxLength { get; set; }
     
     /// <summary>
-    /// Supported type options for user override (INT, FLOAT, DATETIME2, BIT, NVARCHAR)
+    /// Supported type options for user override (INT, FLOAT, DATETIME2, NVARCHAR)
     /// </summary>
-    public string[] SupportedTypes { get; set; } = new[] { "INT", "FLOAT", "DATETIME2", "BIT", "NVARCHAR" };
+    public string[] SupportedTypes { get; set; } = new[] { "INT", "FLOAT", "DATETIME2", "NVARCHAR" };
 }

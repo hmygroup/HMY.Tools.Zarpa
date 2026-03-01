@@ -20,7 +20,7 @@ public class SettingsManager
     {
         public string DefaultSchema { get; set; } = "dbo";
         public bool AutoCreateHistoryTable { get; set; } = true;
-        public bool TemporalTableByDefault { get; set; } = true;
+        public bool TemporalTableByDefault { get; set; } = false;
         public bool RunOnStartup { get; set; } = false;
         public int HotKeyModifier { get; set; } = 0x0001 | 0x0004; // MOD_ALT | MOD_SHIFT
         public int HotKeyVirtualKey { get; set; } = 0x49; // 'I'

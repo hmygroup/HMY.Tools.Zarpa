@@ -305,7 +305,7 @@ public partial class MainForm : Form
             Logger.LogDebug("Column types inferred");
 
             // Show config dialog with schema for type override
-            var configForm = new TableConfigForm(_defaultSchema, _temporalTableByDefault);
+            var configForm = new TableConfigForm(_defaultSchema);
             configForm.SetSchema(schema);  // Load schema into type override control
             
             if (configForm.ShowDialog() == DialogResult.OK)
@@ -316,7 +316,7 @@ public partial class MainForm : Form
                 var finalSchema = configForm.Schema ?? schema;
 
                 // Generate SQL with final schema (including any user-overridden types)
-                var result = SqlServerGenerator.GenerateSql(finalSchema, configForm.TableName, configForm.SchemaName, configForm.IsTemporalTable, configForm.IsTemporaryTable, _autoAppendTemporalSuffix);
+                var result = SqlServerGenerator.GenerateSql(finalSchema, configForm.TableName, configForm.SchemaName, false, configForm.IsTemporaryTable, _autoAppendTemporalSuffix);
 
                 if (result.Success)
                 {

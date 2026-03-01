@@ -87,24 +87,8 @@ public class SqlServerGenerator
                 sb.AppendLine($"    {colDef},");
         }
 
-        if (isTemporalTable)
-        {
-            // Add temporal columns
-            sb.AppendLine("    SysStartTime DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL,");
-            sb.AppendLine("    SysEndTime DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL,");
-            sb.AppendLine("    PERIOD FOR SYSTEM_TIME (SysStartTime, SysEndTime)");
-        }
-
         sb.AppendLine(")");
-
-        if (isTemporalTable)
-        {
-            sb.AppendLine($"WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = {historyTableName}, DATA_CONSISTENCY_CHECK = ON));");
-        }
-        else
-        {
-            sb.AppendLine(";");
-        }
+        sb.AppendLine(";");
 
         return sb.ToString();
     }

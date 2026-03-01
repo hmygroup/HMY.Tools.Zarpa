@@ -5,7 +5,7 @@ using CopyAsInsert.Services;
 using System.Runtime.InteropServices;
 
 /// <summary>
-/// Configuration dialog for table name, schema, temporal table options, and column type overrides
+/// Configuration dialog for table name, schema, and column type overrides
 /// All configuration on a single form with type grid below settings
 /// </summary>
 public partial class TableConfigForm : Form
@@ -15,29 +15,25 @@ public partial class TableConfigForm : Form
 
     public string TableName { get; set; } = string.Empty;
     public string SchemaName { get; set; }
-    public bool IsTemporalTable { get; set; }
     public bool IsTemporaryTable { get; set; }
     public DataTableSchema? Schema { get; set; }
 
     private TypeOverrideControl? _typeOverrideControl;
     private string _defaultSchema = "dbo";
-    private bool _temporalByDefault = false;
+    private TextBox? _txtTableName;
 
     public TableConfigForm()
     {
         InitializeComponent();
         SchemaName = _defaultSchema;
-        IsTemporalTable = _temporalByDefault;
         IsTemporaryTable = true;
     }
 
-    public TableConfigForm(string defaultSchema, bool temporalByDefault)
+    public TableConfigForm(string defaultSchema)
     {
         _defaultSchema = defaultSchema;
-        _temporalByDefault = temporalByDefault;
         InitializeComponent();
         SchemaName = _defaultSchema;
-        IsTemporalTable = _temporalByDefault;
         IsTemporaryTable = true;
     }
 
@@ -45,6 +41,13 @@ public partial class TableConfigForm : Form
     {
         base.OnShown(e);
         SetForegroundWindow(this.Handle);
+
+        // Set focus to table name field with text pre-selected
+        if (_txtTableName != null)
+        {
+            _txtTableName.Focus();
+            _txtTableName.SelectAll();
+        }
     }
 
     private void InitializeComponent()
@@ -89,6 +92,7 @@ public partial class TableConfigForm : Form
             Width = 240,
             Height = 20
         };
+        _txtTableName = txtTableName;
 
         // Schema Label
         var lblSchema = new Label
@@ -109,23 +113,12 @@ public partial class TableConfigForm : Form
             Text = _defaultSchema
         };
 
-        // Temporal Table Checkbox
-        var chkTemporal = new CheckBox
-        {
-            Name = "chkTemporal",
-            Text = "Create Temporal Table with System Versioning",
-            Location = new Point(20, 85),
-            Width = 350,
-            Height = 20,
-            Checked = _temporalByDefault
-        };
-
         // Temporary Table Checkbox
         var chkTemporary = new CheckBox
         {
             Name = "chkTemporary",
             Text = "Create as Temporary Table (#)",
-            Location = new Point(20, 110),
+            Location = new Point(20, 85),
             Width = 350,
             Height = 20,
             Checked = true
@@ -135,7 +128,6 @@ public partial class TableConfigForm : Form
         configPanel.Controls.Add(txtTableName);
         configPanel.Controls.Add(lblSchema);
         configPanel.Controls.Add(txtSchema);
-        configPanel.Controls.Add(chkTemporal);
         configPanel.Controls.Add(chkTemporary);
 
         // ============ Type Override Control ============
@@ -191,6 +183,23 @@ public partial class TableConfigForm : Form
             }
         };
 
+        var btnSetAllNvarchar = new Button
+        {
+            Text = "Set All to NVARCHAR",
+            Location = new Point(140, 10),
+            Width = 140,
+            Height = 30
+        };
+
+        btnSetAllNvarchar.Click += (s, e) =>
+        {
+            if (_typeOverrideControl != null)
+            {
+                _typeOverrideControl.SetAllColumnsToNvarchar();
+                MessageBox.Show("All columns set to NVARCHAR type.", "Set NVARCHAR", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        };
+
         var btnGenerate = new Button
         {
             Text = "Generate",
@@ -210,6 +219,7 @@ public partial class TableConfigForm : Form
         };
 
         buttonPanel.Controls.Add(btnAutoDetect);
+        buttonPanel.Controls.Add(btnSetAllNvarchar);
         buttonPanel.Controls.Add(btnGenerate);
         buttonPanel.Controls.Add(btnCancel);
 
@@ -228,7 +238,6 @@ public partial class TableConfigForm : Form
             {
                 TableName = txtTableName.Text.Trim();
                 SchemaName = txtSchema.Text.Trim();
-                IsTemporalTable = chkTemporal.Checked;
                 IsTemporaryTable = chkTemporary.Checked;
 
                 // Get modified schema from type override control

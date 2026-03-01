@@ -80,7 +80,7 @@ public partial class TypeOverrideControl : UserControl
             HeaderText = "Actual Type",
             Width = 120,
             DataPropertyName = "SqlType",
-            Items = { "INT", "FLOAT", "DATETIME2", "BIT", "NVARCHAR" }
+            Items = { "INT", "FLOAT", "DATETIME2", "NVARCHAR" }
         });
 
         _gridColumnTypes.Columns.Add(new DataGridViewTextBoxColumn
@@ -159,5 +159,19 @@ public partial class TypeOverrideControl : UserControl
         }
 
         return _schema;
+    }
+
+    /// <summary>
+    /// Set all columns to NVARCHAR type
+    /// </summary>
+    public void SetAllColumnsToNvarchar()
+    {
+        if (_gridColumnTypes == null)
+            return;
+
+        foreach (DataGridViewRow row in _gridColumnTypes.Rows)
+        {
+            row.Cells["ActualType"].Value = "NVARCHAR";
+        }
     }
 }

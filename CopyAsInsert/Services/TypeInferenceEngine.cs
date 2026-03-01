@@ -6,8 +6,8 @@ namespace CopyAsInsert.Services;
 
 /// <summary>
 /// Professional type inference engine with support for:
-/// INT, FLOAT, DATETIME2, BIT (boolean), NVARCHAR
-/// Uses confidence thresholds: INT (85%), FLOAT (85%), DATETIME (80%), BIT (90%), NVARCHAR (fallback)
+/// INT, FLOAT, DATETIME2, NVARCHAR
+/// Uses confidence thresholds: INT (85%), FLOAT (85%), DATETIME (80%), NVARCHAR (fallback)
 /// </summary>
 public class TypeInferenceEngine
 {
@@ -15,10 +15,7 @@ public class TypeInferenceEngine
     private const double INT_THRESHOLD = 0.85;           // 85% of values must be valid integers
     private const double FLOAT_THRESHOLD = 0.85;         // 85% of values must be valid decimals (excluding pure ints)
     private const double DATETIME_THRESHOLD = 0.80;      // 80% of values must match date patterns
-    private const double BIT_THRESHOLD = 0.90;           // 90% of values must match boolean patterns (strict)
 
-    /// <summary>
-    /// Infer types for all columns in the schema
     /// Sets SqlType, ConfidencePercent, ConfidenceScore, and InferenceReason for each column
     /// </summary>
     public static void InferColumnTypes(DataTableSchema schema)
@@ -77,23 +74,19 @@ public class TypeInferenceEngine
             return ("NVARCHAR", 1.0, "All values are empty or NULL");
 
         // Try each type in priority order, using thresholds
+        // Note: BIT type is disabled to preserve data integrity
         
-        // 1. Try BIT (boolean) - strict threshold (90%) because true/false patterns are unambiguous
-        var (bitCount, bitConfidence) = DetectBoolean(nonEmptyValues);
-        if (bitConfidence >= BIT_THRESHOLD)
-            return ("BIT", bitConfidence, $"{(int)(bitConfidence * 100)}% match boolean patterns (true/false/yes/no/0/1)");
-
-        // 2. Try DATETIME2 - moderate threshold (80%) due to format variability
+        // 1. Try DATETIME2 - moderate threshold (80%) due to format variability
         var (dateCount, dateConfidence) = DetectDateTime(nonEmptyValues);
         if (dateConfidence >= DATETIME_THRESHOLD)
             return ("DATETIME2", dateConfidence, $"{(int)(dateConfidence * 100)}% match date patterns (ISO/US/EU formats)");
 
-        // 3. Try INT - strict threshold (85%)
+        // 2. Try INT - strict threshold (85%)
         var (intCount, intConfidence) = DetectInteger(nonEmptyValues);
         if (intConfidence >= INT_THRESHOLD)
             return ("INT", intConfidence, $"{(int)(intConfidence * 100)}% are valid integers");
 
-        // 4. Try FLOAT - strict threshold (85%), excluding pure integers
+        // 3. Try FLOAT - strict threshold (85%), excluding pure integers
         var (floatCount, floatConfidence) = DetectFloat(nonEmptyValues);
         if (floatConfidence >= FLOAT_THRESHOLD)
             return ("FLOAT", floatConfidence, $"{(int)(floatConfidence * 100)}% are valid decimals");
@@ -104,7 +97,7 @@ public class TypeInferenceEngine
 
     /// <summary>
     /// Detect if values are valid integers
-    /// Smart handling: allows leading zeros if they form valid integers (e.g., "0001" -> INT)
+    /// Rejects values with leading zeros (e.g., "0001", "0123") to preserve them as NVARCHAR
     /// Handles European number format with thousand separators
     /// </summary>
     private static (int matchCount, double confidence) DetectInteger(List<string> values)
@@ -116,6 +109,14 @@ public class TypeInferenceEngine
             if (value.Contains('.') || value.Contains(','))
             {
                 continue;
+            }
+
+            // Reject values with leading zeros (except "0" itself) to preserve source data
+            // Examples: "0001", "0123", "00456" are NVARCHAR, not INT
+            string trimmed = value.Trim();
+            if (trimmed.Length > 1 && trimmed[0] == '0' && char.IsDigit(trimmed[1]))
+            {
+                continue; // Has leading zero, treat as NVARCHAR
             }
 
             // Try to parse as Int64 to handle larger integers
@@ -205,44 +206,6 @@ public class TypeInferenceEngine
 
             // Check regex patterns
             if (datePatterns.Any(pattern => Regex.IsMatch(value, pattern, RegexOptions.IgnoreCase)))
-            {
-                matchCount++;
-            }
-        }
-
-        double confidence = values.Count > 0 ? (double)matchCount / values.Count : 0;
-        return (matchCount, confidence);
-    }
-
-    /// <summary>
-    /// Detect if values are boolean/bit values
-    /// Accepts: true/false, yes/no, 1/0, on/off (case-insensitive)
-    /// Very strict (90% threshold) because these patterns are unambiguous
-    /// Does not match values containing decimal separators
-    /// </summary>
-    private static (int matchCount, double confidence) DetectBoolean(List<string> values)
-    {
-        var booleanPatterns = new[] { "true", "false", "yes", "no", "on", "off", "1", "0", "t", "f", "y", "n" };
-
-        // If ANY value contains a decimal separator, this column definitely contains numbers, not booleans
-        foreach (var value in values)
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                string trimmed = value.Trim();
-                if (trimmed.Contains('.') || trimmed.Contains(','))
-                {
-                    // Column contains numeric decimals, cannot be boolean
-                    return (0, 0);
-                }
-            }
-        }
-
-        int matchCount = 0;
-        foreach (var value in values)
-        {
-            string trimmed = value.ToLowerInvariant().Trim();
-            if (!string.IsNullOrWhiteSpace(trimmed) && booleanPatterns.Contains(trimmed))
             {
                 matchCount++;
             }

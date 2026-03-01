@@ -32,7 +32,7 @@ public partial class SettingsForm : Form
         InitializeComponent();
         DefaultSchema = "dbo";
         AutoCreateHistoryTable = true;
-        TemporalTableByDefault = true;
+        TemporalTableByDefault = false;
         RunOnStartup = false;
         HotKeyModifier = 0x0001 | 0x0004; // MOD_ALT | MOD_SHIFT
         HotKeyVirtualKey = 0x49; // 'I'
