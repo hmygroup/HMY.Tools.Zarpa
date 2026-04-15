@@ -6,13 +6,10 @@ public class ExcelImportForm : Form
 {
     private TextBox serverTextBox = new();
     private TextBox databaseTextBox = new();
-    private Button testConnectionButton = new();
-    private Label connectionStatusLabel = new();
     private Button importButton = new();
     private Button cancelButton = new();
     private ProgressBar progressBar = new();
     private string? clipboardQuery;
-    private bool connectionTested = false;
 
     public ExcelImportForm()
     {
@@ -23,7 +20,7 @@ public class ExcelImportForm : Form
     private void InitializeComponent()
     {
         this.Text = "Import SQL Query to Excel";
-        this.Size = new Size(500, 300);
+        this.Size = new Size(500, 230);
         this.StartPosition = FormStartPosition.CenterScreen;
         this.TopMost = true;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -59,37 +56,22 @@ public class ExcelImportForm : Form
         databaseTextBox.Size = new Size(300, 25);
         this.Controls.Add(databaseTextBox);
 
-        // Test Connection Button
-        testConnectionButton.Text = "Test Connection";
-        testConnectionButton.Location = new Point(150, 90);
-        testConnectionButton.Size = new Size(120, 30);
-        testConnectionButton.Click += TestConnectionButton_Click;
-        this.Controls.Add(testConnectionButton);
-
-        // Connection Status Label
-        connectionStatusLabel.Location = new Point(280, 95);
-        connectionStatusLabel.Size = new Size(170, 20);
-        connectionStatusLabel.ForeColor = Color.Red;
-        connectionStatusLabel.Text = "Not tested";
-        this.Controls.Add(connectionStatusLabel);
-
         // Progress Bar
-        progressBar.Location = new Point(20, 130);
+        progressBar.Location = new Point(20, 100);
         progressBar.Size = new Size(430, 20);
         progressBar.Visible = false;
         this.Controls.Add(progressBar);
 
         // Import Button
         importButton.Text = "Import to Excel";
-        importButton.Location = new Point(150, 160);
+        importButton.Location = new Point(150, 130);
         importButton.Size = new Size(120, 30);
-        importButton.Enabled = false;
         importButton.Click += ImportButton_Click;
         this.Controls.Add(importButton);
 
         // Cancel Button
         cancelButton.Text = "Cancel";
-        cancelButton.Location = new Point(280, 160);
+        cancelButton.Location = new Point(280, 130);
         cancelButton.Size = new Size(100, 30);
         cancelButton.Click += (s, e) => this.Close();
         this.Controls.Add(cancelButton);
@@ -126,71 +108,8 @@ public class ExcelImportForm : Form
         }
     }
 
-    private void TestConnectionButton_Click(object? sender, EventArgs e)
-    {
-        string server = serverTextBox.Text.Trim();
-        string database = databaseTextBox.Text.Trim();
-
-        if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(database))
-        {
-            connectionStatusLabel.Text = "Enter server and database";
-            connectionStatusLabel.ForeColor = Color.Red;
-            connectionTested = false;
-            importButton.Enabled = false;
-            return;
-        }
-
-        testConnectionButton.Enabled = false;
-        progressBar.Visible = true;
-        progressBar.Style = ProgressBarStyle.Marquee;
-
-        try
-        {
-            var (success, errorMessage) = ExcelInteropManager.TestConnection(server, database);
-            
-            if (success)
-            {
-                connectionStatusLabel.Text = "✓ Connection OK";
-                connectionStatusLabel.ForeColor = Color.Green;
-                connectionTested = true;
-                importButton.Enabled = true;
-            }
-            else
-            {
-                connectionStatusLabel.Text = "✗ Connection Failed";
-                connectionStatusLabel.ForeColor = Color.Red;
-                connectionTested = false;
-                importButton.Enabled = false;
-                
-                MessageBox.Show($"Connection test failed:\n{errorMessage}", 
-                    "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            connectionStatusLabel.Text = "✗ Error";
-            connectionStatusLabel.ForeColor = Color.Red;
-            connectionTested = false;
-            importButton.Enabled = false;
-            
-            MessageBox.Show($"Error testing connection:\n{ex.Message}", 
-                "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-        finally
-        {
-            testConnectionButton.Enabled = true;
-            progressBar.Visible = false;
-        }
-    }
-
     private void ImportButton_Click(object? sender, EventArgs e)
     {
-        if (!connectionTested)
-        {
-            MessageBox.Show("Please test connection first", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
         // Get query from clipboard
         clipboardQuery = GetClipboardText();
         if (string.IsNullOrWhiteSpace(clipboardQuery))
@@ -203,8 +122,14 @@ public class ExcelImportForm : Form
         string server = serverTextBox.Text.Trim();
         string database = databaseTextBox.Text.Trim();
 
+        if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(database))
+        {
+            MessageBox.Show("Please enter server and database names.", 
+                "Missing Information", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         importButton.Enabled = false;
-        testConnectionButton.Enabled = false;
         progressBar.Visible = true;
         progressBar.Style = ProgressBarStyle.Marquee;
 
@@ -247,7 +172,6 @@ public class ExcelImportForm : Form
         finally
         {
             importButton.Enabled = true;
-            testConnectionButton.Enabled = true;
             progressBar.Visible = false;
         }
     }
