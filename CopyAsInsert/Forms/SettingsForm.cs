@@ -13,14 +13,24 @@ public partial class SettingsForm : Form
     public int HotKeyVirtualKey { get; set; }
     public bool AutoAppendTemporalSuffix { get; set; }
     public bool ShowFormOnStartup { get; set; }
+    
+    // Excel import hotkey properties
+    public int ExcelImportHotKeyModifier { get; set; }
+    public int ExcelImportHotKeyVirtualKey { get; set; }
 
-    private int _pendingModifier; // Stores modifier during key capture
-    private int _pendingVirtualKey; // Stores virtual key during capture
+    private int _pendingModifier; // Stores modifier during key capture for clipboard hotkey
+    private int _pendingVirtualKey; // Stores virtual key during capture for clipboard hotkey
+    
+    // Excel import hotkey capture
+    private int _pendingExcelModifier; // Stores modifier during key capture for Excel hotkey
+    private int _pendingExcelVirtualKey; // Stores virtual key during capture for Excel hotkey
     
     // Control references
     private TextBox? _txtSchema;
     private TextBox? _txtHotkey; // Read-only display of current hotkey
     private TextBox? _txtHotkeyCapture; // Captures hotkey input
+    private TextBox? _txtExcelHotkey; // Read-only display of Excel hotkey
+    private TextBox? _txtExcelHotkeyCapture; // Captures Excel hotkey input
     private CheckBox? _chkAutoHistory;
     private CheckBox? _chkTemporal;
     private CheckBox? _chkRunOnStartup;
@@ -38,8 +48,12 @@ public partial class SettingsForm : Form
         HotKeyVirtualKey = 0x49; // 'I'
         AutoAppendTemporalSuffix = false;
         ShowFormOnStartup = false;
+        ExcelImportHotKeyModifier = 0x0001 | 0x0004; // MOD_ALT | MOD_SHIFT
+        ExcelImportHotKeyVirtualKey = 0x45; // 'E'
         _pendingModifier = HotKeyModifier;
         _pendingVirtualKey = HotKeyVirtualKey;
+        _pendingExcelModifier = ExcelImportHotKeyModifier;
+        _pendingExcelVirtualKey = ExcelImportHotKeyVirtualKey;
     }
 
     protected override void OnShown(EventArgs e)
@@ -55,10 +69,15 @@ public partial class SettingsForm : Form
             _txtSchema.Text = DefaultSchema;
         }
         
-        // Hotkey - sync pending values with public properties set by MainForm
+        // Clipboard Hotkey - sync pending values with public properties set by MainForm
         _pendingModifier = HotKeyModifier;
         _pendingVirtualKey = HotKeyVirtualKey;
         UpdateHotkeyDisplay();
+        
+        // Excel Import Hotkey - sync pending values
+        _pendingExcelModifier = ExcelImportHotKeyModifier;
+        _pendingExcelVirtualKey = ExcelImportHotKeyVirtualKey;
+        UpdateExcelHotkeyDisplay();
         
         // Checkboxes
         if (_chkAutoHistory != null)
@@ -89,7 +108,7 @@ public partial class SettingsForm : Form
         this.Text = "Settings";
         this.Icon = File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
         this.Width = 530;
-        this.Height = 560;
+        this.Height = 750; // Expanded to accommodate Excel hotkey section
         this.StartPosition = FormStartPosition.CenterScreen;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
         this.MaximizeBox = false;
@@ -209,13 +228,86 @@ public partial class SettingsForm : Form
             Height = 20,
             Checked = false
         };
+        
+        // Create Auto Append Temporal Suffix checkbox if not already created
+        _chkAutoAppendTemporalSuffix = new CheckBox
+        {
+            Name = "chkAutoAppendTemporalSuffix",
+            Text = "Auto-append '_Temporal' suffix",
+            Left = 20,
+            Top = 295,
+            Width = 480,
+            Height = 20,
+            Checked = false
+        };
+        
+        // Create Show Form On Startup checkbox if not already created
+        _chkShowFormOnStartup = new CheckBox
+        {
+            Name = "chkShowFormOnStartup",
+            Text = "Show form on startup",
+            Left = 20,
+            Top = 325,
+            Width = 480,
+            Height = 20,
+            Checked = false
+        };
+
+        // ============ Excel Import Hotkey Section ============
+        var lblExcelHotkey = new Label
+        {
+            Text = "Excel Import Hotkey:",
+            Left = 20,
+            Top = 370,
+            Width = 150,
+            Height = 20,
+            Font = new Font(this.Font, FontStyle.Bold)
+        };
+
+        _txtExcelHotkey = new TextBox
+        {
+            Name = "txtExcelHotkey",
+            Left = 180,
+            Top = 370,
+            Width = 320,
+            Height = 20,
+            ReadOnly = true,
+            BackColor = SystemColors.ControlLight,
+            ForeColor = SystemColors.WindowText,
+            TabStop = false,
+            Text = ""
+        };
+
+        var lblExcelHotkeyInfo = new Label
+        {
+            Text = "Click the field below and press your desired key combination:",
+            Left = 20,
+            Top = 400,
+            Width = 480,
+            Height = 20,
+            ForeColor = SystemColors.GrayText,
+            Font = new Font(this.Font, FontStyle.Italic)
+        };
+
+        _txtExcelHotkeyCapture = new TextBox
+        {
+            Name = "txtExcelHotkeyCapture",
+            Left = 180,
+            Top = 430,
+            Width = 320,
+            Height = 20,
+            BackColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle,
+            Text = "Click here and press hotkey...",
+            ForeColor = SystemColors.GrayText
+        };
 
         // ============ Buttons ============
         var btnOK = new Button
         {
             Text = "OK",
             Left = 340,
-            Top = 380,
+            Top = 480,
             Width = 80,
             Height = 30,
             DialogResult = DialogResult.OK
@@ -225,7 +317,7 @@ public partial class SettingsForm : Form
         {
             Text = "Cancel",
             Left = 430,
-            Top = 380,
+            Top = 480,
             Width = 80,
             Height = 30,
             DialogResult = DialogResult.Cancel
@@ -245,6 +337,11 @@ public partial class SettingsForm : Form
         this.Controls.Add(_chkRunOnStartup);
         this.Controls.Add(_chkAutoAppendTemporalSuffix);
         this.Controls.Add(_chkShowFormOnStartup);
+        
+        this.Controls.Add(lblExcelHotkey);
+        this.Controls.Add(_txtExcelHotkey);
+        this.Controls.Add(lblExcelHotkeyInfo);
+        this.Controls.Add(_txtExcelHotkeyCapture);
         
         this.Controls.Add(btnOK);
         this.Controls.Add(btnCancel);
@@ -310,6 +407,62 @@ public partial class SettingsForm : Form
             _txtHotkeyCapture.Text = $"✓ Captured: {FormatHotkey(_pendingModifier, _pendingVirtualKey)}";
         };
 
+        // Excel hotkey capture event handler
+        _txtExcelHotkeyCapture.KeyDown += (s, e) =>
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+
+            // Clear placeholder text on first key press
+            if (_txtExcelHotkeyCapture.Text == "Click here and press hotkey...")
+            {
+                _txtExcelHotkeyCapture.Text = "";
+            }
+
+            // Extract modifiers
+            var modifiers = 0;
+
+            if ((e.Modifiers & Keys.Control) == Keys.Control)
+                modifiers |= 0x0002; // MOD_CTRL
+
+            if ((e.Modifiers & Keys.Alt) == Keys.Alt)
+                modifiers |= 0x0001; // MOD_ALT
+
+            if ((e.Modifiers & Keys.Shift) == Keys.Shift)
+                modifiers |= 0x0004; // MOD_SHIFT
+
+            // Get the virtual key
+            int vKey = (int)e.KeyCode;
+
+            // Validate hotkey - reject modifier keys only
+            var reservedKeys = new[] { Keys.LControlKey, Keys.RControlKey, Keys.LShiftKey, Keys.RShiftKey, 
+                                       Keys.LMenu, Keys.RMenu, Keys.Control, Keys.Shift, Keys.Alt };
+
+            if (reservedKeys.Contains(e.KeyCode))
+            {
+                MessageBox.Show("Modifier keys alone are not allowed.\nPlease press a regular key (A-Z, 0-9, F1-F12, etc.) along with modifiers.", 
+                    "Invalid Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtExcelHotkeyCapture.Text = "Click here and press hotkey...";
+                return;
+            }
+
+            if (modifiers == 0)
+            {
+                MessageBox.Show("Please use at least one modifier key:\nHold Ctrl, Alt, or Shift while pressing your key.", 
+                    "Invalid Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtExcelHotkeyCapture.Text = "Click here and press hotkey...";
+                return;
+            }
+
+            // Store the new hotkey
+            _pendingExcelModifier = modifiers;
+            _pendingExcelVirtualKey = vKey;
+
+            // Update the display
+            UpdateExcelHotkeyDisplay();
+            _txtExcelHotkeyCapture.Text = $"✓ Captured: {FormatHotkey(_pendingExcelModifier, _pendingExcelVirtualKey)}";
+        };
+
         this.FormClosing += (s, e) =>
         {
             if (this.DialogResult == DialogResult.OK)
@@ -323,6 +476,8 @@ public partial class SettingsForm : Form
                 ShowFormOnStartup = _chkShowFormOnStartup?.Checked ?? false;
                 HotKeyModifier = _pendingModifier;
                 HotKeyVirtualKey = _pendingVirtualKey;
+                ExcelImportHotKeyModifier = _pendingExcelModifier;
+                ExcelImportHotKeyVirtualKey = _pendingExcelVirtualKey;
             }
         };
 
@@ -334,6 +489,14 @@ public partial class SettingsForm : Form
         if (_txtHotkey != null)
         {
             _txtHotkey.Text = FormatHotkey(_pendingModifier, _pendingVirtualKey);
+        }
+    }
+
+    private void UpdateExcelHotkeyDisplay()
+    {
+        if (_txtExcelHotkey != null)
+        {
+            _txtExcelHotkey.Text = FormatHotkey(_pendingExcelModifier, _pendingExcelVirtualKey);
         }
     }
 

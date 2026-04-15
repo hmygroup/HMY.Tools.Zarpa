@@ -26,6 +26,12 @@ public class SettingsManager
         public int HotKeyVirtualKey { get; set; } = 0x49; // 'I'
         public bool AutoAppendTemporalSuffix { get; set; } = false; // Control "_Temporal" suffix
         public bool ShowFormOnStartup { get; set; } = false; // Show main form on startup
+        
+        // Excel Import settings
+        public string ExcelImportServer { get; set; } = string.Empty; // Last used SQL Server
+        public string ExcelImportDatabase { get; set; } = string.Empty; // Last used database
+        public int ExcelImportHotKeyModifier { get; set; } = 0x0001 | 0x0004; // MOD_ALT | MOD_SHIFT
+        public int ExcelImportHotKeyVirtualKey { get; set; } = 0x45; // 'E'
     }
 
     /// <summary>

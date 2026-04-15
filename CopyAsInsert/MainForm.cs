@@ -16,6 +16,19 @@ public partial class MainForm : Form
     [DllImport("user32.dll")]
     private static extern bool SetFocus(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vk);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    private const int WM_HOTKEY = 0x0312;
+    private const int CLIPBOARD_HOTKEY_ID = 9000;
+    private const int EXCEL_IMPORT_HOTKEY_ID = 9001;
+    private const int MOD_ALT = 0x0001;
+    private const int MOD_SHIFT = 0x0004;
+    private const int MOD_CTRL = 0x0002;
+
     private NotifyIcon? _trayIcon;
     private ContextMenuStrip? _contextMenu;
     private ClipboardInterceptor? _clipboardInterceptor;
@@ -31,6 +44,11 @@ public partial class MainForm : Form
     private int _hotKeyModifier = 0x0001 | 0x0004; // MOD_ALT | MOD_SHIFT
     private int _hotKeyVirtualKey = 0x49; // 'I'
     private bool _hotkeyRegistered = false;
+    
+    // Excel import hotkey settings
+    private int _excelImportHotKeyModifier = MOD_ALT | MOD_SHIFT;
+    private int _excelImportHotKeyVirtualKey = 0x45; // 'E'
+    private bool _excelImportHotkeyRegistered = false;
 
     public MainForm()
     {
@@ -52,13 +70,15 @@ public partial class MainForm : Form
         _showFormOnStartup = settings.ShowFormOnStartup;
         _hotKeyModifier = settings.HotKeyModifier;
         _hotKeyVirtualKey = settings.HotKeyVirtualKey;
+        _excelImportHotKeyModifier = settings.ExcelImportHotKeyModifier;
+        _excelImportHotKeyVirtualKey = settings.ExcelImportHotKeyVirtualKey;
         // Load history from file
         var loadedHistory = HistoryManager.LoadHistory();
         _conversionHistory.Clear();
         _conversionHistory.AddRange(loadedHistory);
         // Set up tray icon first
         SetupTrayIcon();
-        // Register hotkey after form is fully created and has window handle
+        // Register hotkeys after form is fully created and has window handle
         SetupHotkey();
         // Check for updates asynchronously
         CheckForUpdatesAsync();
@@ -218,47 +238,89 @@ public partial class MainForm : Form
 
     private void SetupHotkey()
     {
-        if (_hotkeyRegistered)
-            return; // Already registered
+        if (_hotkeyRegistered && _excelImportHotkeyRegistered)
+            return; // Both already registered
 
-        _clipboardInterceptor = new ClipboardInterceptor();
-        _clipboardInterceptor.HotKeyPressed += OnHotKeyPressed;
+        // Set up clipboard interceptor for clipboard hotkey
+        if (!_hotkeyRegistered)
+        {
+            _clipboardInterceptor = new ClipboardInterceptor();
+            _clipboardInterceptor.HotKeyPressed += OnHotKeyPressed;
 
-        try
-        {
-            _clipboardInterceptor.InitializeHotKey(this.Handle, _hotKeyModifier, _hotKeyVirtualKey);
-            _hotkeyRegistered = true;
-            
-            Logger.LogInfo($"Hotkey {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)} registered successfully");
-            
-            // Show confirmation
-            // if (_trayIcon != null)
-            //     _trayIcon.ShowBalloonTip(2000, "Ready", "Hotkey registered successfully", ToolTipIcon.Info);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError("Failed to register hotkey", ex);
-            // Try to fall back to Alt+Shift+I
             try
             {
-                Logger.LogInfo("Attempting fallback to Alt+Shift+I...");
-                _clipboardInterceptor.InitializeHotKey(this.Handle, ClipboardInterceptor.MOD_ALT | ClipboardInterceptor.MOD_SHIFT, 0x49);
+                _clipboardInterceptor.InitializeHotKey(this.Handle, _hotKeyModifier, _hotKeyVirtualKey);
                 _hotkeyRegistered = true;
-                _hotKeyModifier = ClipboardInterceptor.MOD_ALT | ClipboardInterceptor.MOD_SHIFT;
-                _hotKeyVirtualKey = 0x49;
-                Logger.LogInfo("Fallback hotkey Alt+Shift+I registered successfully");
+                
+                Logger.LogInfo($"Hotkey {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)} registered successfully");
             }
-            catch (Exception ex2)
+            catch (Exception ex)
             {
-                Logger.LogError("Failed to register fallback hotkey", ex2);
-                // if (_trayIcon != null)
-                //     _trayIcon.ShowBalloonTip(3000, "Error", $"Hotkey registration failed: {ex2.Message}", ToolTipIcon.Error);
+                Logger.LogError("Failed to register hotkey", ex);
+                // Try to fall back to Alt+Shift+I
+                try
+                {
+                    Logger.LogInfo("Attempting fallback to Alt+Shift+I...");
+                    _clipboardInterceptor.InitializeHotKey(this.Handle, ClipboardInterceptor.MOD_ALT | ClipboardInterceptor.MOD_SHIFT, 0x49);
+                    _hotkeyRegistered = true;
+                    _hotKeyModifier = ClipboardInterceptor.MOD_ALT | ClipboardInterceptor.MOD_SHIFT;
+                    _hotKeyVirtualKey = 0x49;
+                    Logger.LogInfo("Fallback hotkey Alt+Shift+I registered successfully");
+                }
+                catch (Exception ex2)
+                {
+                    Logger.LogError("Failed to register fallback hotkey", ex2);
+                }
+            }
+        }
+
+        // Register Excel import hotkey directly
+        if (!_excelImportHotkeyRegistered)
+        {
+            try
+            {
+                if (RegisterHotKey(this.Handle, EXCEL_IMPORT_HOTKEY_ID, _excelImportHotKeyModifier, _excelImportHotKeyVirtualKey))
+                {
+                    _excelImportHotkeyRegistered = true;
+                    Logger.LogInfo($"Excel import hotkey {FormatHotkey(_excelImportHotKeyModifier, _excelImportHotKeyVirtualKey)} registered successfully");
+                }
+                else
+                {
+                    Logger.LogWarning("Failed to register Excel import hotkey");
+                    // Try fallback: Alt+Shift+E
+                    try
+                    {
+                        Logger.LogInfo("Attempting fallback to Alt+Shift+E for Excel import...");
+                        if (RegisterHotKey(this.Handle, EXCEL_IMPORT_HOTKEY_ID, MOD_ALT | MOD_SHIFT, 0x45))
+                        {
+                            _excelImportHotkeyRegistered = true;
+                            _excelImportHotKeyModifier = MOD_ALT | MOD_SHIFT;
+                            _excelImportHotKeyVirtualKey = 0x45;
+                            Logger.LogInfo("Fallback Excel import hotkey Alt+Shift+E registered successfully");
+                        }
+                    }
+                    catch (Exception ex2)
+                    {
+                        Logger.LogError("Failed to register fallback Excel import hotkey", ex2);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError("Failed to register Excel import hotkey", ex);
             }
         }
     }
 
     protected override void WndProc(ref Message m)
     {
+        // Handle Excel import hotkey directly
+        if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == EXCEL_IMPORT_HOTKEY_ID)
+        {
+            OnExcelImportHotKeyPressed();
+            return;
+        }
+
         _clipboardInterceptor?.ProcessWindowMessage(ref m);
         base.WndProc(ref m);
     }
@@ -266,6 +328,22 @@ public partial class MainForm : Form
     private void OnHotKeyPressed(object? sender, EventArgs e)
     {
         ProcessClipboard();
+    }
+
+    private void OnExcelImportHotKeyPressed()
+    {
+        try
+        {
+            Logger.LogDebug("Excel import hotkey pressed");
+            var excelForm = new ExcelImportForm();
+            excelForm.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("Error opening Excel import form", ex);
+            MessageBox.Show($"Error opening Excel import form: {ex.Message}", "Error", 
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void ProcessClipboard()
@@ -378,7 +456,9 @@ public partial class MainForm : Form
             AutoAppendTemporalSuffix = _autoAppendTemporalSuffix,
             ShowFormOnStartup = _showFormOnStartup,
             HotKeyModifier = _hotKeyModifier,
-            HotKeyVirtualKey = _hotKeyVirtualKey
+            HotKeyVirtualKey = _hotKeyVirtualKey,
+            ExcelImportHotKeyModifier = _excelImportHotKeyModifier,
+            ExcelImportHotKeyVirtualKey = _excelImportHotKeyVirtualKey
         };
 
         if (settingsForm.ShowDialog() == DialogResult.OK)
@@ -389,8 +469,11 @@ public partial class MainForm : Form
             _autoAppendTemporalSuffix = settingsForm.AutoAppendTemporalSuffix;
             _showFormOnStartup = settingsForm.ShowFormOnStartup;
 
-            bool hotkeyChanged = _hotKeyModifier != settingsForm.HotKeyModifier || 
+            bool clipboardHotkeyChanged = _hotKeyModifier != settingsForm.HotKeyModifier || 
                                 _hotKeyVirtualKey != settingsForm.HotKeyVirtualKey;
+            
+            bool excelHotkeyChanged = _excelImportHotKeyModifier != settingsForm.ExcelImportHotKeyModifier || 
+                                      _excelImportHotKeyVirtualKey != settingsForm.ExcelImportHotKeyVirtualKey;
 
             // Save settings to file
             var settings = new SettingsManager.ApplicationSettings
@@ -402,12 +485,14 @@ public partial class MainForm : Form
                 AutoAppendTemporalSuffix = _autoAppendTemporalSuffix,
                 ShowFormOnStartup = _showFormOnStartup,
                 HotKeyModifier = settingsForm.HotKeyModifier,
-                HotKeyVirtualKey = settingsForm.HotKeyVirtualKey
+                HotKeyVirtualKey = settingsForm.HotKeyVirtualKey,
+                ExcelImportHotKeyModifier = settingsForm.ExcelImportHotKeyModifier,
+                ExcelImportHotKeyVirtualKey = settingsForm.ExcelImportHotKeyVirtualKey
             };
             SettingsManager.SaveSettings(settings);
 
-            // Update hotkey if it changed
-            if (hotkeyChanged && _clipboardInterceptor != null)
+            // Update clipboard hotkey if it changed
+            if (clipboardHotkeyChanged && _clipboardInterceptor != null)
             {
                 _hotKeyModifier = settingsForm.HotKeyModifier;
                 _hotKeyVirtualKey = settingsForm.HotKeyVirtualKey;
@@ -417,7 +502,7 @@ public partial class MainForm : Form
                 if (!hotkeyUpdated)
                 {
                     MessageBox.Show(
-                        $"Could not update hotkey to {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}.\n\n" +
+                        $"Could not update clipboard hotkey to {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}.\n\n" +
                         "It may be in use by another application. Please try a different combination.",
                         "Hotkey Registration Failed",
                         MessageBoxButtons.OK,
@@ -434,7 +519,44 @@ public partial class MainForm : Form
                     {
                         _trayIcon.Text = $"ZARPA - {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}";
                     }
-                    Logger.LogInfo($"Hotkey updated to {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}");
+                    Logger.LogInfo($"Clipboard hotkey updated to {FormatHotkey(_hotKeyModifier, _hotKeyVirtualKey)}");
+                }
+            }
+
+            // Update Excel import hotkey if it changed
+            if (excelHotkeyChanged && _excelImportHotkeyRegistered)
+            {
+                _excelImportHotKeyModifier = settingsForm.ExcelImportHotKeyModifier;
+                _excelImportHotKeyVirtualKey = settingsForm.ExcelImportHotKeyVirtualKey;
+
+                // Unregister old hotkey
+                UnregisterHotKey(this.Handle, EXCEL_IMPORT_HOTKEY_ID);
+                _excelImportHotkeyRegistered = false;
+
+                // Register new hotkey
+                if (RegisterHotKey(this.Handle, EXCEL_IMPORT_HOTKEY_ID, _excelImportHotKeyModifier, _excelImportHotKeyVirtualKey))
+                {
+                    _excelImportHotkeyRegistered = true;
+                    Logger.LogInfo($"Excel import hotkey updated to {FormatHotkey(_excelImportHotKeyModifier, _excelImportHotKeyVirtualKey)}");
+                }
+                else
+                {
+                    MessageBox.Show(
+                        $"Could not update Excel import hotkey to {FormatHotkey(_excelImportHotKeyModifier, _excelImportHotKeyVirtualKey)}.\n\n" +
+                        "It may be in use by another application. Please try a different combination.",
+                        "Excel Import Hotkey Registration Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+
+                    // Revert to previous settings
+                    _excelImportHotKeyModifier = settings.ExcelImportHotKeyModifier;
+                    _excelImportHotKeyVirtualKey = settings.ExcelImportHotKeyVirtualKey;
+                    
+                    // Re-register old hotkey
+                    if (RegisterHotKey(this.Handle, EXCEL_IMPORT_HOTKEY_ID, _excelImportHotKeyModifier, _excelImportHotKeyVirtualKey))
+                    {
+                        _excelImportHotkeyRegistered = true;
+                    }
                 }
             }
 
