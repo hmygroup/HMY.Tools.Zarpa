@@ -23,6 +23,8 @@ public class ExcelInteropManager
 
         try
         {
+            int? excelHwnd = null;
+            bool excelBroughtToFront = false;
             // Resolver Excel.Application via COM using reflection (NO Office.Interop types)
             Type? excelType = Type.GetTypeFromProgID("Excel.Application");
             if (excelType == null)
@@ -198,6 +200,8 @@ public class ExcelInteropManager
                 if (hwnd is int hWndInt)
                 {
                     SetForegroundWindow((IntPtr)hWndInt);
+                    excelHwnd = hWndInt;
+                    excelBroughtToFront = true;
                     Logger.LogDebug("Set Excel window to foreground");
                 }
             }
@@ -226,7 +230,9 @@ public class ExcelInteropManager
                 ServerName = server,
                 DatabaseName = database,
                 ImportTime = DateTime.Now,
-                OutputPath = outputPath
+                OutputPath = outputPath,
+                ExcelHwnd = excelHwnd,
+                ExcelBroughtToForeground = excelBroughtToFront
             };
         }
         catch (Exception ex)

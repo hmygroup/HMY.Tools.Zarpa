@@ -1,4 +1,5 @@
 using CopyAsInsert.Services;
+using System.Runtime.InteropServices;
 using CopyAsInsert.Models;
 using System.Threading;
 using System.Threading.Tasks;
@@ -179,12 +180,26 @@ public class ExcelImportForm : Form
                 // Clear import-running flag before closing so OnFormClosing doesn't prompt
                 _importRunning = false;
                 this.Close();
+
+                // Try to set focus to Excel if hwnd was returned
+                try
+                {
+                    if (result.ExcelHwnd.HasValue)
+                    {
+                        SetForegroundWindow(new IntPtr(result.ExcelHwnd.Value));
+                    }
+                }
+                catch { }
             }
             else
             {
                 string errorMsg = result.ErrorMessage ?? "Unknown error";
                 string stackTrace = result.ErrorStackTrace ?? string.Empty;
                 Logger.LogError($"Import failed: {errorMsg}\n{stackTrace}");
+
+                // Bring this form to front so the error dialog is reachable
+                try { SetForegroundWindow(this.Handle); this.BringToFront(); this.Activate(); } catch { }
+
                 var errorForm = new ErrorDetailForm(errorMsg, stackTrace);
                 errorForm.ShowDialog(this);
             }
@@ -211,6 +226,7 @@ public class ExcelImportForm : Form
     {
         if (_importRunning)
         {
+            try { SetForegroundWindow(this.Handle); this.BringToFront(); this.Activate(); } catch { }
             var dr = MessageBox.Show("An import is running. Close anyway?", "Import in progress", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (dr == DialogResult.No)
             {
@@ -220,6 +236,9 @@ public class ExcelImportForm : Form
         }
         base.OnFormClosing(e);
     }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     private void AppendLog(string level, string message)
     {

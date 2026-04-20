@@ -46,4 +46,14 @@ public class ImportResult
     /// Summary for display (e.g., "50 rows from Orders")
     /// </summary>
     public string Summary => $"{RowCount} rows from {DatabaseName}";
+
+    /// <summary>
+    /// Excel window handle (if available) returned by the import operation
+    /// </summary>
+    public int? ExcelHwnd { get; set; }
+
+    /// <summary>
+    /// True if the import operation attempted to bring Excel to the foreground
+    /// </summary>
+    public bool ExcelBroughtToForeground { get; set; }
 }
