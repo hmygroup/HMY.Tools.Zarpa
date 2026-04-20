@@ -1,3 +1,4 @@
+using System;
 using Serilog;
 using Serilog.Core;
 
@@ -10,6 +11,8 @@ public static class Logger
 {
     private static ILogger? _logger;
     private static readonly object _lock = new object();
+    // Event for UI components to subscribe and receive log messages in real-time
+    public static event Action<string, string>? MessageLogged;
 
     /// <summary>
     /// Initialize the logging system
@@ -63,6 +66,7 @@ public static class Logger
     public static void LogInfo(string message)
     {
         GetLogger().Information(message);
+        try { MessageLogged?.Invoke("INFO", message); } catch { }
     }
 
     /// <summary>
@@ -71,6 +75,7 @@ public static class Logger
     public static void LogDebug(string message)
     {
         GetLogger().Debug(message);
+        try { MessageLogged?.Invoke("DBG", message); } catch { }
     }
 
     /// <summary>
@@ -79,6 +84,7 @@ public static class Logger
     public static void LogWarning(string message)
     {
         GetLogger().Warning(message);
+        try { MessageLogged?.Invoke("WRN", message); } catch { }
     }
 
     /// <summary>
@@ -87,6 +93,7 @@ public static class Logger
     public static void LogError(string message, Exception ex)
     {
         GetLogger().Error(ex, message);
+        try { MessageLogged?.Invoke("ERR", message + " - " + ex.ToString()); } catch { }
     }
 
     /// <summary>
@@ -95,6 +102,7 @@ public static class Logger
     public static void LogError(string message)
     {
         GetLogger().Error(message);
+        try { MessageLogged?.Invoke("ERR", message); } catch { }
     }
 
     /// <summary>
@@ -103,6 +111,7 @@ public static class Logger
     public static void LogFatal(string message, Exception ex)
     {
         GetLogger().Fatal(ex, message);
+        try { MessageLogged?.Invoke("FTL", message + " - " + ex.ToString()); } catch { }
     }
 
     /// <summary>

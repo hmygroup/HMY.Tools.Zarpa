@@ -1,4 +1,9 @@
 using CopyAsInsert.Services;
+using CopyAsInsert.Models;
+using System.Threading;
+using System.Threading.Tasks;
+using System;
+using System.Windows.Forms;
 
 namespace CopyAsInsert.Forms;
 
@@ -8,8 +13,9 @@ public class ExcelImportForm : Form
     private TextBox databaseTextBox = new();
     private Button importButton = new();
     private Button cancelButton = new();
-    private ProgressBar progressBar = new();
+    private RichTextBox logTextBox = new();
     private string? clipboardQuery;
+    private bool _importRunning = false;
 
     public ExcelImportForm()
     {
@@ -20,7 +26,7 @@ public class ExcelImportForm : Form
     private void InitializeComponent()
     {
         this.Text = "Import SQL Query to Excel";
-        this.Size = new Size(500, 230);
+        this.Size = new Size(500, 380);
         this.StartPosition = FormStartPosition.CenterScreen;
         this.TopMost = true;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -56,22 +62,25 @@ public class ExcelImportForm : Form
         databaseTextBox.Size = new Size(300, 25);
         this.Controls.Add(databaseTextBox);
 
-        // Progress Bar
-        progressBar.Location = new Point(20, 100);
-        progressBar.Size = new Size(430, 20);
-        progressBar.Visible = false;
-        this.Controls.Add(progressBar);
+        // Log text area (replaces progress bar)
+        logTextBox.Location = new Point(20, 100);
+        logTextBox.Size = new Size(430, 180);
+        logTextBox.ReadOnly = true;
+        logTextBox.Multiline = true;
+        logTextBox.ScrollBars = RichTextBoxScrollBars.Vertical;
+        logTextBox.Visible = false;
+        this.Controls.Add(logTextBox);
 
         // Import Button
         importButton.Text = "Import to Excel";
-        importButton.Location = new Point(150, 130);
+        importButton.Location = new Point(150, 300);
         importButton.Size = new Size(120, 30);
         importButton.Click += ImportButton_Click;
         this.Controls.Add(importButton);
 
         // Cancel Button
         cancelButton.Text = "Cancel";
-        cancelButton.Location = new Point(280, 130);
+        cancelButton.Location = new Point(280, 300);
         cancelButton.Size = new Size(100, 30);
         cancelButton.Click += (s, e) => this.Close();
         this.Controls.Add(cancelButton);
@@ -108,13 +117,13 @@ public class ExcelImportForm : Form
         }
     }
 
-    private void ImportButton_Click(object? sender, EventArgs e)
+    private async void ImportButton_Click(object? sender, EventArgs e)
     {
         // Get query from clipboard
         clipboardQuery = GetClipboardText();
         if (string.IsNullOrWhiteSpace(clipboardQuery))
         {
-            MessageBox.Show("Clipboard is empty. Please copy a SQL query first.", 
+            MessageBox.Show("Clipboard is empty. Please copy a SQL query first.",
                 "No Query", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
@@ -124,37 +133,58 @@ public class ExcelImportForm : Form
 
         if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(database))
         {
-            MessageBox.Show("Please enter server and database names.", 
+            MessageBox.Show("Please enter server and database names.",
                 "Missing Information", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         importButton.Enabled = false;
-        progressBar.Visible = true;
-        progressBar.Style = ProgressBarStyle.Marquee;
+        cancelButton.Enabled = false;
+        logTextBox.Visible = true;
+        logTextBox.Clear();
+
+        // Ensure logger is initialized and subscribe to its messages
+        Logger.Initialize();
+        Action<string, string> onLog = (lvl, msg) => AppendLog(lvl, msg);
+        Logger.MessageLogged += onLog;
+        _importRunning = true;
 
         try
         {
-            // Import query to Excel
-            var result = ExcelInteropManager.InjectQueryIntoExcel(server, database, clipboardQuery);
-            
+            Logger.LogInfo($"Starting Excel import to {server}/{database}");
+
+            var tcs = new TaskCompletionSource<ImportResult>();
+            var staThread = new Thread(() =>
+            {
+                try
+                {
+                    var res = ExcelInteropManager.InjectQueryIntoExcel(server, database, clipboardQuery);
+                    tcs.SetResult(res);
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetResult(new ImportResult { Success = false, ErrorMessage = ex.Message, ErrorStackTrace = ex.StackTrace });
+                }
+            });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.IsBackground = true;
+            staThread.Start();
+
+            var result = await tcs.Task;
+
             if (result.Success)
             {
                 SaveSettings();
-                
-                Logger.LogDebug($"Query imported successfully: {result.RowCount} rows");
-                
-                // Close this form - Excel now has the data
+                Logger.LogInfo($"Query imported successfully: {result.RowCount} rows");
+                // Clear import-running flag before closing so OnFormClosing doesn't prompt
+                _importRunning = false;
                 this.Close();
             }
             else
             {
                 string errorMsg = result.ErrorMessage ?? "Unknown error";
-                string stackTrace = result.ErrorStackTrace ?? "";
-                
+                string stackTrace = result.ErrorStackTrace ?? string.Empty;
                 Logger.LogError($"Import failed: {errorMsg}\n{stackTrace}");
-                
-                // Show error detail form
                 var errorForm = new ErrorDetailForm(errorMsg, stackTrace);
                 errorForm.ShowDialog(this);
             }
@@ -162,7 +192,6 @@ public class ExcelImportForm : Form
         catch (Exception ex)
         {
             Logger.LogError($"Unexpected error during import: {ex.Message}\n{ex.StackTrace}");
-            
             var errorForm = new ErrorDetailForm(
                 $"Unexpected error: {ex.Message}",
                 ex.StackTrace ?? "No stack trace available"
@@ -171,9 +200,38 @@ public class ExcelImportForm : Form
         }
         finally
         {
+            _importRunning = false;
+            Logger.MessageLogged -= onLog;
             importButton.Enabled = true;
-            progressBar.Visible = false;
+            cancelButton.Enabled = true;
         }
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (_importRunning)
+        {
+            var dr = MessageBox.Show("An import is running. Close anyway?", "Import in progress", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (dr == DialogResult.No)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+        base.OnFormClosing(e);
+    }
+
+    private void AppendLog(string level, string message)
+    {
+        if (logTextBox.InvokeRequired)
+        {
+            logTextBox.BeginInvoke(new Action(() => AppendLog(level, message)));
+            return;
+        }
+
+        logTextBox.AppendText($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}{Environment.NewLine}");
+        logTextBox.SelectionStart = logTextBox.Text.Length;
+        logTextBox.ScrollToCaret();
     }
 
     private string GetClipboardText()
