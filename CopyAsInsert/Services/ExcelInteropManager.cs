@@ -3,7 +3,7 @@ using System.Reflection;
 using System.Windows.Forms;
 using System.Collections.Generic;
 using CopyAsInsert.Models;
-// Note: keep logic so the query is executed by Excel via QueryTables
+// Note: keep logic so the query is executed by Excel via Power Query
 
 namespace CopyAsInsert.Services;
 
@@ -111,6 +111,7 @@ public class ExcelInteropManager
     {
         object? excelApp = null;
         object? workbook = null;
+        object? sharedWorksheet = null;
         bool attachedToRunningExcel = false;
         bool createdWorkbook = false;
         bool useOpenWorkbook = targetOptions?.UseOpenWorkbook == true;
@@ -191,370 +192,53 @@ public class ExcelInteropManager
                 throw new Exception("No se pudo crear workbook");
             }
             Logger.LogDebug("Workbook created");
-
-            object? worksheet = ResolveTargetWorksheet(workbook, targetOptions, useOpenWorkbook);
-            if (worksheet == null)
-            {
-                throw new Exception("No se pudo obtener worksheet");
-            }
-
-            string worksheetName = GetComStringProperty(worksheet, "Name") ?? "Sheet1";
+            List<QueryImportDefinition> queryImports = SqlImportQueryPlanner.BuildImportQueries(query);
             bool appendToExistingSheet = useOpenWorkbook && targetOptions?.CreateNewWorksheet == false;
-
-            object? destination = GetDestinationRange(worksheet, appendToExistingSheet);
-            Logger.LogDebug($"Obtained destination range for worksheet '{worksheetName}'");
-
-            // Try to add a Power Query (M) to the workbook's Queries collection so it appears
-            // in the Queries pane (Power Query). This keeps the query in Excel instead of
-            // creating an external connection-only object. If this succeeds we treat it as
-            // a successful injection (Excel will perform the query when refreshed).
-            bool powerQueryAdded = false;
-            object? powerQueryTable = null;
-            object? powerQueryTargetSheet = worksheet;
-            try
-            {
-                object? queries = workbook.GetType().InvokeMember("Queries", BindingFlags.GetProperty, null, workbook, null);
-                if (queries != null)
-                {
-                    string pqName = GetUniqueWorkbookQueryName(workbook, $"Query_{DateTime.Now:yyyyMMdd_HHmmss}");
-                    string mEscaped = query?.Replace("\"", "\"\"") ?? string.Empty; // escape quotes for M string
-                    string mFormula = $"let\r\n    Source = Sql.Database(\"{server}\", \"{database}\", [Query=\"{mEscaped}\"])\r\nin\r\n    Source";
-                    Logger.LogDebug($"Attempting to add Power Query '{pqName}' to workbook.Queries");
-                    queries.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, queries, new object[] { pqName, mFormula });
-                    Logger.LogInfo($"Power Query '{pqName}' added to workbook.Queries");
-                    powerQueryAdded = true;
-
-                    // Try to load the Power Query into a NEW worksheet as a table using Excel's
-                    // Mashup provider. WORKBOOK_QUERY sources can trigger the Import Data dialog
-                    // and leave the query in "Connection only" mode.
-                    try
-                    {
-                        if (!useOpenWorkbook)
-                        {
-                            object? dedicatedSheet = null;
-                            try
-                            {
-                                dedicatedSheet = AddWorksheet(workbook, GetUniqueWorksheetName(workbook, pqName));
-                            }
-                            catch (Exception addSheetEx)
-                            {
-                                Logger.LogDebug($"Could not add new sheet for Power Query: {addSheetEx.Message}");
-                            }
-
-                            if (dedicatedSheet != null)
-                            {
-                                powerQueryTargetSheet = dedicatedSheet;
-                                destination = GetDestinationRange(powerQueryTargetSheet, false);
-                            }
-                        }
-
-                        object? targetSheet = powerQueryTargetSheet ?? worksheet;
-                        object? newDestination = destination;
-
-                        object? targetListObjects = null;
-                        try
-                        {
-                            targetListObjects = targetSheet.GetType().InvokeMember("ListObjects", BindingFlags.GetProperty, null, targetSheet, null);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogDebug($"Could not access ListObjects collection for Power Query load: {ex.Message}");
-                        }
-
-                        object? createdListObj = null;
-                        if (targetListObjects != null && newDestination != null)
-                        {
-                            try
-                            {
-                                string mashupConnection = $"OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location={pqName};Extended Properties=\"\"";
-                                Logger.LogDebug($"Loading Power Query '{pqName}' into worksheet using Mashup OLE DB connection.");
-                                createdListObj = targetListObjects.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, targetListObjects,
-                                    new object[] { 0, mashupConnection, true, 0, newDestination });
-                            }
-                            catch (TargetInvocationException tie)
-                            {
-                                var ie = tie.InnerException ?? tie;
-                                Logger.LogWarning($"ListObjects.Add failed for Power Query '{pqName}': {ie.Message}");
-                                Logger.LogDebug(ie.ToString());
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.LogDebug($"Could not create ListObject for Power Query load: {ex.Message}");
-                            }
-                        }
-
-                        if (createdListObj != null)
-                        {
-                            try { createdListObj.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, createdListObj, new object[] { $"Table_{pqName}" }); } catch { }
-
-                            object? createdQtbl = null;
-                            try
-                            {
-                                createdQtbl = createdListObj.GetType().InvokeMember("QueryTable", BindingFlags.GetProperty, null, createdListObj, null);
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.LogDebug($"Could not access QueryTable for Power Query ListObject: {ex.Message}");
-                            }
-
-                            if (createdQtbl != null)
-                            {
-                                try { createdQtbl.GetType().InvokeMember("CommandType", BindingFlags.SetProperty, null, createdQtbl, new object[] { 2 }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("CommandText", BindingFlags.SetProperty, null, createdQtbl, new object[] { new string[] { $"SELECT * FROM [{pqName}]" } }); } catch (Exception ex) { Logger.LogDebug($"Could not set CommandText for Power Query table load: {ex.Message}"); }
-                                try { createdQtbl.GetType().InvokeMember("RowNumbers", BindingFlags.SetProperty, null, createdQtbl, new object[] { false }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("FillAdjacentFormulas", BindingFlags.SetProperty, null, createdQtbl, new object[] { false }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("RefreshOnFileOpen", BindingFlags.SetProperty, null, createdQtbl, new object[] { false }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("BackgroundQuery", BindingFlags.SetProperty, null, createdQtbl, new object[] { false }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("RefreshStyle", BindingFlags.SetProperty, null, createdQtbl, new object[] { 0 }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("SavePassword", BindingFlags.SetProperty, null, createdQtbl, new object[] { false }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("SaveData", BindingFlags.SetProperty, null, createdQtbl, new object[] { true }); } catch { }
-                                try { createdQtbl.GetType().InvokeMember("AdjustColumnWidth", BindingFlags.SetProperty, null, createdQtbl, new object[] { true }); } catch { }
-
-                                try
-                                {
-                                    createdQtbl.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, createdQtbl, new object[] { false });
-                                    int loadedRowCount = GetImportedRowCount(createdQtbl);
-                                    if (loadedRowCount > 0)
-                                    {
-                                        powerQueryTable = createdQtbl;
-                                        Logger.LogInfo($"Power Query '{pqName}' loaded into worksheet with {loadedRowCount} rows.");
-                                    }
-                                    else
-                                    {
-                                        Logger.LogWarning($"Power Query '{pqName}' refresh completed but no rows were materialized in the worksheet.");
-                                    }
-                                }
-                                catch (TargetInvocationException tie)
-                                {
-                                    var ie = tie.InnerException ?? tie;
-                                    Logger.LogWarning($"Refresh failed for Power Query worksheet load: {ie.Message}");
-                                    Logger.LogDebug(ie.ToString());
-                                }
-                                catch (Exception ex)
-                                {
-                                    Logger.LogDebug($"Refresh exception for Power Query worksheet load: {ex.Message}");
-                                }
-                            }
-                        }
-
-                        if (powerQueryTable == null)
-                        {
-                            try
-                            {
-                                if (createdListObj != null)
-                                {
-                                    createdListObj.GetType().InvokeMember("Delete", BindingFlags.InvokeMethod, null, createdListObj, null);
-                                    Logger.LogDebug($"Deleted empty Power Query table shell for '{pqName}' before fallback.");
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.LogDebug($"Could not delete empty Power Query table shell: {ex.Message}");
-                            }
-
-                            try
-                            {
-                                Logger.LogWarning($"Power Query sheet load produced no data; attempting provider fallback on the same sheet using MSOLEDBSQL.");
-                                object? targetQTables = targetSheet.GetType().InvokeMember("QueryTables", BindingFlags.GetProperty, null, targetSheet, null);
-                                if (targetQTables != null && newDestination != null)
-                                {
-                                    string prov = "MSOLEDBSQL";
-                                    string connectionString = $"OLEDB;Provider={prov};Server={server};Database={database};Integrated Security=SSPI;Persist Security Info=False;";
-                                    Logger.LogDebug($"Provider fallback connection string: {connectionString}");
-                                    object? provQtbl = targetQTables.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, targetQTables,
-                                        new object[] { connectionString, newDestination!, query });
-                                    if (provQtbl != null)
-                                    {
-                                        try { provQtbl.GetType().InvokeMember("FieldNames", BindingFlags.SetProperty, null, provQtbl, new object[] { true }); } catch { }
-                                        try { provQtbl.GetType().InvokeMember("RowNumbers", BindingFlags.SetProperty, null, provQtbl, new object[] { false }); } catch { }
-                                        try { provQtbl.GetType().InvokeMember("FillAdjacentFormulas", BindingFlags.SetProperty, null, provQtbl, new object[] { false }); } catch { }
-                                        try { provQtbl.GetType().InvokeMember("PreserveFormatting", BindingFlags.SetProperty, null, provQtbl, new object[] { true }); } catch { }
-                                        try { provQtbl.GetType().InvokeMember("RefreshStyle", BindingFlags.SetProperty, null, provQtbl, new object[] { 0 }); } catch { }
-                                        try { provQtbl.GetType().InvokeMember("SavePassword", BindingFlags.SetProperty, null, provQtbl, new object[] { false }); } catch { }
-                                        try { provQtbl.GetType().InvokeMember("SaveData", BindingFlags.SetProperty, null, provQtbl, new object[] { true }); } catch { }
-                                        try { provQtbl.GetType().InvokeMember("AdjustColumnWidth", BindingFlags.SetProperty, null, provQtbl, new object[] { true }); } catch { }
-
-                                        try
-                                        {
-                                            provQtbl.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, provQtbl, new object[] { false });
-                                            int loadedRowCount = GetImportedRowCount(provQtbl);
-                                            if (loadedRowCount > 0)
-                                            {
-                                                powerQueryTable = provQtbl;
-                                                Logger.LogInfo($"Provider fallback loaded {loadedRowCount} rows into worksheet for '{pqName}'.");
-                                            }
-                                            else
-                                            {
-                                                Logger.LogWarning($"Provider fallback refresh completed but still produced no rows for '{pqName}'.");
-                                            }
-                                        }
-                                        catch (TargetInvocationException tie)
-                                        {
-                                            var ie = tie.InnerException ?? tie;
-                                            Logger.LogWarning($"Provider fallback refresh failed: {ie.Message}");
-                                            Logger.LogDebug(ie.ToString());
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Logger.LogDebug($"Provider fallback refresh exception: {ex.Message}");
-                                        }
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.LogDebug($"Provider fallback exception on Power Query sheet: {ex.Message}");
-                            }
-                        }
-                    }
-                    catch (Exception pqLoadEx)
-                    {
-                        Logger.LogDebug($"Could not load Power Query into worksheet: {pqLoadEx.Message}");
-                    }
-                }
-
-                SafeReleaseComObject(queries);
-            }
-            catch (TargetInvocationException tie)
-            {
-                var ie = tie.InnerException ?? tie;
-                Logger.LogWarning($"Add Power Query failed: {ie.Message}");
-                Logger.LogDebug(ie.ToString());
-
-                try
-                {
-                    var m = (ie.Message ?? string.Empty).ToLowerInvariant();
-                    if (m.Contains("evaluate") && m.Contains("native") || m.Contains("native database") || m.Contains("evaluatenativequeryunpermitted") || m.Contains("permission is required to run this native"))
-                    {
-                        Logger.LogWarning("Power Query blocked native query execution (EvaluateNativeQuery). Prompting user to allow native queries in Power Query settings.");
-                        string helpMsg = "Power Query está bloqueando la ejecución de consultas SQL nativas.\n\n" +
-                            "Para permitir la ejecución de esta consulta, abra el Power Query Editor (Datos -> Obtener y transformar -> Launch Power Query Editor).\n" +
-                            "En el editor, haga clic en 'Edit Permissions' en la banda amarilla o vaya a File -> Options and settings -> Query Options -> Security y habilite 'Allow native database queries' para esta fuente.\n\n" +
-                            "Alternativamente, en Excel vaya a Data -> Get Data -> Data Source Settings -> Edit Permissions y permita la consulta para la fuente.\n\n" +
-                            "Después de dar permiso, vuelva a ejecutar la importación.";
-                        try { MessageBox.Show(helpMsg, "Permiso requerido para consulta nativa", MessageBoxButtons.OK, MessageBoxIcon.Warning); } catch { }
-                    }
-                }
-                catch { }
-            }
-            catch (Exception pqEx)
-            {
-                Logger.LogDebug($"Could not add Power Query: {pqEx.Message}");
-            }
-
-            // Try to use Excel QueryTables with common providers. If all providers fail, throw a descriptive error
-            // so that Excel remains responsible for executing the query (do not run the SQL locally).
-            object? queryTables = null;
-            try
-            {
-                object? fallbackWorksheet = powerQueryTargetSheet ?? worksheet;
-                queryTables = fallbackWorksheet?.GetType().InvokeMember("QueryTables", BindingFlags.GetProperty, null, fallbackWorksheet, null);
-                Logger.LogDebug("QueryTables collection obtained from worksheet");
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"QueryTables not available: {ex.Message}");
-                Logger.LogDebug(ex.ToString());
-                queryTables = null;
-            }
-
-            object? qt = powerQueryTable;
-            Exception? providerException = null;
-
-            if (queryTables != null && qt == null)
-            {
-                // This import targets SQL Server only — use the Microsoft OLE DB Driver for SQL Server
-                string prov = "MSOLEDBSQL";
-                string connectionString = $"OLEDB;Provider={prov};Server={server};Database={database};Integrated Security=SSPI;Persist Security Info=False;";
-                Logger.LogDebug($"Using SQL Server OLE DB provider: {prov}");
-                Logger.LogDebug($"Connection string: {connectionString}");
-                try
-                {
-                    qt = queryTables.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, queryTables,
-                        new object[] { connectionString, destination!, query });
-
-                    if (qt != null)
-                    {
-                        Logger.LogInfo($"QueryTable created using provider {prov}");
-                        qt.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, qt, new object[] { GetUniqueWorkbookQueryName(workbook, $"Query_{DateTime.Now:yyyyMMdd_HHmmss}") });
-                        qt.GetType().InvokeMember("FieldNames", BindingFlags.SetProperty, null, qt, new object[] { true });
-                        qt.GetType().InvokeMember("RowNumbers", BindingFlags.SetProperty, null, qt, new object[] { false });
-                        qt.GetType().InvokeMember("FillAdjacentFormulas", BindingFlags.SetProperty, null, qt, new object[] { false });
-                        qt.GetType().InvokeMember("PreserveFormatting", BindingFlags.SetProperty, null, qt, new object[] { true });
-                        qt.GetType().InvokeMember("RefreshStyle", BindingFlags.SetProperty, null, qt, new object[] { 0 });
-                        qt.GetType().InvokeMember("SavePassword", BindingFlags.SetProperty, null, qt, new object[] { false });
-                        qt.GetType().InvokeMember("SaveData", BindingFlags.SetProperty, null, qt, new object[] { true });
-                        qt.GetType().InvokeMember("AdjustColumnWidth", BindingFlags.SetProperty, null, qt, new object[] { true });
-                        try
-                        {
-                            qt.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, qt, new object[] { false });
-                            Logger.LogDebug("QueryTable.Refresh() invoked");
-                        }
-                        catch (TargetInvocationException tie)
-                        {
-                            var ie = tie.InnerException ?? tie;
-                            Logger.LogWarning($"Refresh failed for provider {prov}: {ie.Message}");
-                            Logger.LogDebug(ie.ToString());
-                        }
-                    }
-                }
-                catch (TargetInvocationException tie)
-                {
-                    providerException = tie.InnerException ?? tie;
-                    Logger.LogError($"Provider {prov} Add() failed: {providerException.Message}");
-                    Logger.LogDebug(providerException.ToString());
-                }
-                catch (Exception ex)
-                {
-                    providerException = ex;
-                    Logger.LogError($"Provider {prov} test failed: {ex.Message}");
-                    Logger.LogDebug(ex.ToString());
-                }
-
-                if (qt == null)
-                {
-                    Logger.LogError($"Failed to create QueryTable using provider {prov}. Ensure the Microsoft OLE DB Driver for SQL Server (MSOLEDBSQL) is installed and available on this machine.");
-                }
-            }
-
-            if (powerQueryAdded && qt == null)
-            {
-                Logger.LogWarning("Power Query was added to the workbook, but no rows were loaded into a worksheet.");
-            }
-
-            if (qt == null)
-            {
-                Logger.LogError("QueryTable.Add failed using MSOLEDBSQL provider.");
-                if (providerException != null)
-                {
-                    Logger.LogError(providerException.ToString());
-                }
-                throw new Exception("QueryTable.Add failed with MSOLEDBSQL. Ensure the Microsoft OLE DB Driver for SQL Server is installed. See application log for details.");
-            }
-            
             int rowCount = 0;
-            try
+
+            if (queryImports.Count > 1)
             {
-                if (qt != null)
+                Logger.LogInfo($"Detected {queryImports.Count} final SELECT statements. Creating one Power Query per final SELECT.");
+            }
+
+            if (appendToExistingSheet)
+            {
+                sharedWorksheet = ResolveTargetWorksheet(workbook, targetOptions, useOpenWorkbook);
+                if (sharedWorksheet == null)
                 {
-                    object? resultRange = qt.GetType().InvokeMember("ResultRange", BindingFlags.GetProperty, null, qt, null);
-                    if (resultRange != null)
-                    {
-                        object? rows = resultRange.GetType().InvokeMember("Rows", BindingFlags.GetProperty, null, resultRange, null);
-                        if (rows != null)
-                        {
-                            object? count = rows.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, rows, null);
-                            if (count is int intCount && intCount > 1)
-                                rowCount = intCount - 1;
-                            Logger.LogDebug($"ResultRange rows detected: {rowCount}");
-                        }
-                    }
+                    throw new Exception("No se pudo obtener worksheet");
                 }
             }
-            catch (Exception ex)
+
+            for (int queryIndex = 0; queryIndex < queryImports.Count; queryIndex++)
             {
-                Logger.LogWarning($"Error reading ResultRange: {ex.Message}");
-                Logger.LogDebug(ex.ToString());
+                QueryImportDefinition queryImport = queryImports[queryIndex];
+                object? currentWorksheet = sharedWorksheet;
+
+                if (currentWorksheet == null)
+                {
+                    currentWorksheet = ResolveWorksheetForImport(workbook, targetOptions, useOpenWorkbook, queryImport, queryIndex, queryImports.Count);
+                }
+
+                if (currentWorksheet == null)
+                {
+                    throw new Exception("No se pudo obtener worksheet");
+                }
+
+                string worksheetName = GetComStringProperty(currentWorksheet, "Name") ?? $"Sheet{queryIndex + 1}";
+                Logger.LogInfo($"Importing result query {queryIndex + 1}/{queryImports.Count} into worksheet '{worksheetName}'.");
+
+                try
+                {
+                    rowCount += ImportQueryIntoWorksheet(workbook, currentWorksheet, server, database, queryImport, appendToExistingSheet);
+                }
+                finally
+                {
+                    if (!ReferenceEquals(currentWorksheet, sharedWorksheet))
+                    {
+                        SafeReleaseComObject(currentWorksheet);
+                    }
+                }
             }
             
             // Traer Excel al frente
@@ -587,13 +271,13 @@ public class ExcelInteropManager
             {
                 Logger.LogDebug($"Could not read workbook FullName: {ex.Message}");
             }
-
-            SafeReleaseComObject(worksheet);
+            SafeReleaseComObject(sharedWorksheet);
             
             return new ImportResult
             {
                 Success = true,
                 RowCount = rowCount,
+                QueryCount = queryImports.Count,
                 ServerName = server,
                 DatabaseName = database,
                 ImportTime = DateTime.Now,
@@ -606,6 +290,7 @@ public class ExcelInteropManager
         {
             Logger.LogError($"Error inyectando query en Excel: {ex.Message}");
             Logger.LogDebug(ex.ToString());
+            SafeReleaseComObject(sharedWorksheet);
 
             // Cerrar Excel si hubo error
             try
@@ -639,6 +324,257 @@ public class ExcelInteropManager
                 DatabaseName = database
             };
         }
+    }
+
+    private static int ImportQueryIntoWorksheet(
+        object workbook,
+        object worksheet,
+        string server,
+        string database,
+        QueryImportDefinition queryDefinition,
+        bool appendToExistingSheet)
+    {
+        object? destination = GetDestinationRange(worksheet, appendToExistingSheet);
+        string worksheetName = GetComStringProperty(worksheet, "Name") ?? "Sheet1";
+        string pqName = GetUniqueWorkbookQueryName(workbook, $"Query_{queryDefinition.SuggestedName}");
+        bool powerQueryAdded = false;
+        object? powerQueryTable = null;
+        Exception? loadException = null;
+
+        Logger.LogDebug($"Obtained destination range for worksheet '{worksheetName}' and query '{pqName}'");
+
+        try
+        {
+            object? queries = workbook.GetType().InvokeMember("Queries", BindingFlags.GetProperty, null, workbook, null);
+            try
+            {
+                if (queries == null)
+                {
+                    throw new Exception("Excel no expone la colección de Power Query (Queries) en este libro.");
+                }
+
+                string mEscaped = queryDefinition.Script.Replace("\"", "\"\"");
+                string mFormula = $"let\r\n    Source = Sql.Database(\"{server}\", \"{database}\", [Query=\"{mEscaped}\"])\r\nin\r\n    Source";
+                Logger.LogDebug($"Attempting to add Power Query '{pqName}' to workbook.Queries");
+                queries.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, queries, new object[] { pqName, mFormula });
+                Logger.LogInfo($"Power Query '{pqName}' added to workbook.Queries");
+                powerQueryAdded = true;
+            }
+            finally
+            {
+                SafeReleaseComObject(queries);
+            }
+
+            powerQueryTable = LoadPowerQueryIntoWorksheet(worksheet, destination, pqName);
+            int rowCount = GetImportedRowCount(powerQueryTable);
+            Logger.LogInfo($"Power Query '{pqName}' loaded into worksheet with {rowCount} rows.");
+            Logger.LogDebug($"ResultRange rows detected: {rowCount}");
+            return rowCount;
+        }
+        catch (TargetInvocationException tie)
+        {
+            loadException = tie.InnerException ?? tie;
+            Logger.LogWarning($"Power Query failed: {loadException.Message}");
+            Logger.LogDebug(loadException.ToString());
+            TryPromptForNativeQueryPermission(loadException);
+        }
+        catch (Exception pqEx)
+        {
+            loadException = pqEx;
+            Logger.LogDebug($"Could not complete Power Query import: {pqEx.Message}");
+        }
+        finally
+        {
+            SafeReleaseComObject(powerQueryTable);
+            SafeReleaseComObject(destination);
+        }
+
+        if (!powerQueryAdded)
+        {
+            throw CreatePowerQueryLoadException("No se pudo crear la Power Query en Excel.", loadException);
+        }
+
+        throw CreatePowerQueryLoadException("La Power Query se creó pero no se pudo cargar como tabla en la hoja seleccionada.", loadException);
+    }
+
+    private static object LoadPowerQueryIntoWorksheet(object worksheet, object? destination, string pqName)
+    {
+        object? targetListObjects = null;
+        object? createdListObj = null;
+        object? createdQtbl = null;
+
+        try
+        {
+            targetListObjects = worksheet.GetType().InvokeMember("ListObjects", BindingFlags.GetProperty, null, worksheet, null);
+            if (targetListObjects == null)
+            {
+                throw new Exception("No se pudo acceder a la colección de tablas (ListObjects) de la hoja de Excel.");
+            }
+
+            if (destination == null)
+            {
+                throw new Exception("No se pudo calcular la celda de destino para cargar la Power Query.");
+            }
+
+            string mashupConnection = $"OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location={pqName};Extended Properties=\"\"";
+            Logger.LogDebug($"Loading Power Query '{pqName}' into worksheet using Excel Mashup connection.");
+            createdListObj = targetListObjects.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, targetListObjects,
+                new object[] { 0, mashupConnection, true, 0, destination });
+
+            if (createdListObj == null)
+            {
+                throw new Exception("Excel no devolvió la tabla (ListObject) al intentar cargar la Power Query.");
+            }
+
+            try
+            {
+                createdListObj.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, createdListObj, new object[] { $"Table_{pqName}" });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug($"Could not set ListObject name for Power Query '{pqName}': {ex.Message}");
+            }
+
+            createdQtbl = createdListObj.GetType().InvokeMember("QueryTable", BindingFlags.GetProperty, null, createdListObj, null);
+            if (createdQtbl == null)
+            {
+                throw new Exception("Excel no devolvió el QueryTable asociado a la Power Query cargada.");
+            }
+
+            ConfigurePowerQueryTable(createdQtbl, $"SELECT * FROM [{pqName}]");
+            createdQtbl.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, createdQtbl, new object[] { false });
+            return createdQtbl;
+        }
+        catch
+        {
+            TryDeleteListObject(createdListObj, pqName);
+            SafeReleaseComObject(createdQtbl);
+            throw;
+        }
+        finally
+        {
+            SafeReleaseComObject(createdListObj);
+            SafeReleaseComObject(targetListObjects);
+        }
+    }
+
+    private static object? ResolveWorksheetForImport(
+        object workbook,
+        ImportTargetOptions? targetOptions,
+        bool useOpenWorkbook,
+        QueryImportDefinition queryDefinition,
+        int queryIndex,
+        int totalQueries)
+    {
+        if (useOpenWorkbook)
+        {
+            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
+        }
+
+        if (queryIndex == 0)
+        {
+            object? firstWorksheet = GetFirstWorksheet(workbook);
+            if (firstWorksheet != null && totalQueries > 1)
+            {
+                TryRenameWorksheet(firstWorksheet, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
+            }
+
+            return firstWorksheet;
+        }
+
+        return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
+    }
+
+    private static object? GetFirstWorksheet(object workbook)
+    {
+        object? sheets = null;
+        try
+        {
+            sheets = workbook.GetType().InvokeMember("Sheets", BindingFlags.GetProperty, null, workbook, null);
+            return sheets?.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, sheets, new object[] { 1 });
+        }
+        finally
+        {
+            SafeReleaseComObject(sheets);
+        }
+    }
+
+    private static void TryRenameWorksheet(object worksheet, string worksheetName)
+    {
+        try
+        {
+            worksheet.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, worksheet, new object[] { worksheetName });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug($"Could not set worksheet name '{worksheetName}': {ex.Message}");
+        }
+    }
+
+    private static void ConfigurePowerQueryTable(object queryTable, string commandText)
+    {
+        try { queryTable.GetType().InvokeMember("CommandType", BindingFlags.SetProperty, null, queryTable, new object[] { 2 }); } catch { }
+        try { queryTable.GetType().InvokeMember("CommandText", BindingFlags.SetProperty, null, queryTable, new object[] { new string[] { commandText } }); } catch (Exception ex) { Logger.LogDebug($"Could not set CommandText for query table load: {ex.Message}"); }
+
+        try { queryTable.GetType().InvokeMember("RowNumbers", BindingFlags.SetProperty, null, queryTable, new object[] { false }); } catch { }
+        try { queryTable.GetType().InvokeMember("FillAdjacentFormulas", BindingFlags.SetProperty, null, queryTable, new object[] { false }); } catch { }
+        try { queryTable.GetType().InvokeMember("RefreshOnFileOpen", BindingFlags.SetProperty, null, queryTable, new object[] { false }); } catch { }
+        try { queryTable.GetType().InvokeMember("BackgroundQuery", BindingFlags.SetProperty, null, queryTable, new object[] { false }); } catch { }
+        try { queryTable.GetType().InvokeMember("PreserveFormatting", BindingFlags.SetProperty, null, queryTable, new object[] { true }); } catch { }
+        try { queryTable.GetType().InvokeMember("RefreshStyle", BindingFlags.SetProperty, null, queryTable, new object[] { 0 }); } catch { }
+        try { queryTable.GetType().InvokeMember("SavePassword", BindingFlags.SetProperty, null, queryTable, new object[] { false }); } catch { }
+        try { queryTable.GetType().InvokeMember("SaveData", BindingFlags.SetProperty, null, queryTable, new object[] { true }); } catch { }
+        try { queryTable.GetType().InvokeMember("AdjustColumnWidth", BindingFlags.SetProperty, null, queryTable, new object[] { true }); } catch { }
+    }
+
+    private static void TryDeleteListObject(object? listObject, string pqName)
+    {
+        try
+        {
+            if (listObject != null)
+            {
+                listObject.GetType().InvokeMember("Delete", BindingFlags.InvokeMethod, null, listObject, null);
+                Logger.LogDebug($"Deleted empty Power Query table shell for '{pqName}'.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug($"Could not delete empty Power Query table shell: {ex.Message}");
+        }
+    }
+
+    private static void TryPromptForNativeQueryPermission(Exception exception)
+    {
+        try
+        {
+            string message = (exception.Message ?? string.Empty).ToLowerInvariant();
+            bool nativeQueryBlocked =
+                (message.Contains("evaluate") && message.Contains("native")) ||
+                message.Contains("native database") ||
+                message.Contains("evaluatenativequeryunpermitted") ||
+                message.Contains("permission is required to run this native");
+
+            if (nativeQueryBlocked)
+            {
+                Logger.LogWarning("Power Query blocked native query execution (EvaluateNativeQuery). Prompting user to allow native queries in Power Query settings.");
+                string helpMsg = "Power Query está bloqueando la ejecución de consultas SQL nativas.\n\n" +
+                    "Para permitir la ejecución de esta consulta, abra el Power Query Editor (Datos -> Obtener y transformar -> Launch Power Query Editor).\n" +
+                    "En el editor, haga clic en 'Edit Permissions' en la banda amarilla o vaya a File -> Options and settings -> Query Options -> Security y habilite 'Allow native database queries' para esta fuente.\n\n" +
+                    "Alternativamente, en Excel vaya a Data -> Get Data -> Data Source Settings -> Edit Permissions y permita la consulta para la fuente.\n\n" +
+                    "Después de dar permiso, vuelva a ejecutar la importación.";
+                try { MessageBox.Show(helpMsg, "Permiso requerido para consulta nativa", MessageBoxButtons.OK, MessageBoxIcon.Warning); } catch { }
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static Exception CreatePowerQueryLoadException(string message, Exception? innerException)
+    {
+        return innerException == null
+            ? new Exception(message)
+            : new Exception($"{message} Detalle: {innerException.Message}", innerException);
     }
 
     private static object? ResolveTargetWorksheet(object workbook, ImportTargetOptions? targetOptions, bool useOpenWorkbook)

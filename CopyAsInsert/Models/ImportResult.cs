@@ -11,6 +11,11 @@ public class ImportResult
     /// Number of rows imported
     /// </summary>
     public int RowCount { get; set; }
+
+    /// <summary>
+    /// Number of Excel queries created during the import
+    /// </summary>
+    public int QueryCount { get; set; } = 1;
     
     /// <summary>
     /// Path to the generated Excel file
