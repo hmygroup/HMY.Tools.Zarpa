@@ -12,11 +12,27 @@ public class ExcelImportForm : Form
 {
     private TextBox serverTextBox = new();
     private TextBox databaseTextBox = new();
+    private CheckBox useOpenWorkbookCheckBox = new();
+    private ComboBox workbookComboBox = new();
+    private ComboBox sheetComboBox = new();
+    private Button refreshWorkbooksButton = new();
     private Button importButton = new();
     private Button cancelButton = new();
     private RichTextBox logTextBox = new();
+    private Label workbookLabel = new();
+    private Label sheetLabel = new();
+    private Label openWorkbookHintLabel = new();
     private string? clipboardQuery;
     private bool _importRunning = false;
+
+    private sealed class SheetSelectionItem
+    {
+        public string? SheetName { get; init; }
+        public bool CreateNewSheet { get; init; }
+        public string DisplayText { get; init; } = string.Empty;
+
+        public override string ToString() => DisplayText;
+    }
 
     public ExcelImportForm()
     {
@@ -27,7 +43,7 @@ public class ExcelImportForm : Form
     private void InitializeComponent()
     {
         this.Text = "Import SQL Query to Excel";
-        this.Size = new Size(500, 380);
+        this.Size = new Size(540, 470);
         this.StartPosition = FormStartPosition.CenterScreen;
         this.TopMost = true;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -63,9 +79,59 @@ public class ExcelImportForm : Form
         databaseTextBox.Size = new Size(300, 25);
         this.Controls.Add(databaseTextBox);
 
+        useOpenWorkbookCheckBox.Text = "Usar un libro Excel ya abierto";
+        useOpenWorkbookCheckBox.Location = new Point(20, 95);
+        useOpenWorkbookCheckBox.Size = new Size(260, 25);
+        useOpenWorkbookCheckBox.CheckedChanged += UseOpenWorkbookCheckBox_CheckedChanged;
+        this.Controls.Add(useOpenWorkbookCheckBox);
+
+        workbookLabel = new Label
+        {
+            Text = "Libro abierto:",
+            Location = new Point(20, 130),
+            Size = new Size(120, 25),
+            AutoSize = false
+        };
+        this.Controls.Add(workbookLabel);
+
+        workbookComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        workbookComboBox.Location = new Point(150, 130);
+        workbookComboBox.Size = new Size(260, 25);
+        workbookComboBox.SelectedIndexChanged += WorkbookComboBox_SelectedIndexChanged;
+        this.Controls.Add(workbookComboBox);
+
+        refreshWorkbooksButton.Text = "Refresh";
+        refreshWorkbooksButton.Location = new Point(420, 130);
+        refreshWorkbooksButton.Size = new Size(80, 25);
+        refreshWorkbooksButton.Click += RefreshWorkbooksButton_Click;
+        this.Controls.Add(refreshWorkbooksButton);
+
+        sheetLabel = new Label
+        {
+            Text = "Hoja destino:",
+            Location = new Point(20, 165),
+            Size = new Size(120, 25),
+            AutoSize = false
+        };
+        this.Controls.Add(sheetLabel);
+
+        sheetComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        sheetComboBox.Location = new Point(150, 165);
+        sheetComboBox.Size = new Size(350, 25);
+        this.Controls.Add(sheetComboBox);
+
+        openWorkbookHintLabel = new Label
+        {
+            Text = "Si eliges una hoja existente, la importación se añadirá debajo del contenido actual.",
+            Location = new Point(150, 195),
+            Size = new Size(350, 35),
+            AutoSize = false
+        };
+        this.Controls.Add(openWorkbookHintLabel);
+
         // Log text area (replaces progress bar)
-        logTextBox.Location = new Point(20, 100);
-        logTextBox.Size = new Size(430, 180);
+        logTextBox.Location = new Point(20, 240);
+        logTextBox.Size = new Size(480, 150);
         logTextBox.ReadOnly = true;
         logTextBox.Multiline = true;
         logTextBox.ScrollBars = RichTextBoxScrollBars.Vertical;
@@ -74,17 +140,19 @@ public class ExcelImportForm : Form
 
         // Import Button
         importButton.Text = "Import to Excel";
-        importButton.Location = new Point(150, 300);
+        importButton.Location = new Point(170, 405);
         importButton.Size = new Size(120, 30);
         importButton.Click += ImportButton_Click;
         this.Controls.Add(importButton);
 
         // Cancel Button
         cancelButton.Text = "Cancel";
-        cancelButton.Location = new Point(280, 300);
+        cancelButton.Location = new Point(300, 405);
         cancelButton.Size = new Size(100, 30);
         cancelButton.Click += (s, e) => this.Close();
         this.Controls.Add(cancelButton);
+
+        UpdateOpenWorkbookControls();
     }
 
     private void LoadSettings()
@@ -131,12 +199,39 @@ public class ExcelImportForm : Form
 
         string server = serverTextBox.Text.Trim();
         string database = databaseTextBox.Text.Trim();
+        ExcelInteropManager.ImportTargetOptions? targetOptions = null;
 
         if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(database))
         {
             MessageBox.Show("Please enter server and database names.",
                 "Missing Information", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
+        }
+
+        if (useOpenWorkbookCheckBox.Checked)
+        {
+            if (workbookComboBox.SelectedItem is not ExcelInteropManager.OpenWorkbookInfo selectedWorkbook)
+            {
+                MessageBox.Show("No se ha encontrado ningún libro de Excel abierto. Desmarca la opción o abre un libro antes de importar.",
+                    "Libro no disponible", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (sheetComboBox.SelectedItem is not SheetSelectionItem selectedSheet)
+            {
+                MessageBox.Show("Selecciona una hoja destino o crea una nueva antes de importar.",
+                    "Hoja no seleccionada", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            targetOptions = new ExcelInteropManager.ImportTargetOptions
+            {
+                UseOpenWorkbook = true,
+                WorkbookKey = selectedWorkbook.WorkbookKey,
+                WorkbookName = selectedWorkbook.Name,
+                WorksheetName = selectedSheet.SheetName,
+                CreateNewWorksheet = selectedSheet.CreateNewSheet
+            };
         }
 
         importButton.Enabled = false;
@@ -153,13 +248,24 @@ public class ExcelImportForm : Form
         try
         {
             Logger.LogInfo($"Starting Excel import to {server}/{database}");
+            if (targetOptions?.UseOpenWorkbook == true)
+            {
+                if (targetOptions.CreateNewWorksheet)
+                {
+                    Logger.LogInfo($"Targeting open workbook '{targetOptions.WorkbookName}' and creating a new worksheet.");
+                }
+                else
+                {
+                    Logger.LogInfo($"Targeting open workbook '{targetOptions.WorkbookName}', worksheet '{targetOptions.WorksheetName}'.");
+                }
+            }
 
             var tcs = new TaskCompletionSource<ImportResult>();
             var staThread = new Thread(() =>
             {
                 try
                 {
-                    var res = ExcelInteropManager.InjectQueryIntoExcel(server, database, clipboardQuery);
+                    var res = ExcelInteropManager.InjectQueryIntoExcel(server, database, clipboardQuery, targetOptions);
                     tcs.SetResult(res);
                 }
                 catch (Exception ex)
@@ -267,5 +373,93 @@ public class ExcelImportForm : Form
             Logger.LogError($"Error reading clipboard: {ex.Message}");
         }
         return string.Empty;
+    }
+
+    private void UseOpenWorkbookCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        UpdateOpenWorkbookControls();
+        if (useOpenWorkbookCheckBox.Checked)
+        {
+            RefreshOpenWorkbookOptions();
+        }
+    }
+
+    private void RefreshWorkbooksButton_Click(object? sender, EventArgs e)
+    {
+        RefreshOpenWorkbookOptions();
+    }
+
+    private void WorkbookComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        PopulateSheetOptions();
+        UpdateOpenWorkbookControls();
+    }
+
+    private void RefreshOpenWorkbookOptions()
+    {
+        workbookComboBox.Items.Clear();
+        sheetComboBox.Items.Clear();
+
+        var openWorkbooks = ExcelInteropManager.GetOpenWorkbooks();
+        foreach (var workbook in openWorkbooks)
+        {
+            workbookComboBox.Items.Add(workbook);
+        }
+
+        if (workbookComboBox.Items.Count > 0)
+        {
+            workbookComboBox.SelectedIndex = 0;
+            openWorkbookHintLabel.Text = "Si eliges una hoja existente, la importación se añadirá debajo del contenido actual.";
+        }
+        else
+        {
+            openWorkbookHintLabel.Text = "No hay libros de Excel abiertos. Desmarca esta opción para usar el flujo normal.";
+        }
+
+        UpdateOpenWorkbookControls();
+    }
+
+    private void PopulateSheetOptions()
+    {
+        sheetComboBox.Items.Clear();
+
+        if (workbookComboBox.SelectedItem is not ExcelInteropManager.OpenWorkbookInfo selectedWorkbook)
+        {
+            return;
+        }
+
+        sheetComboBox.Items.Add(new SheetSelectionItem
+        {
+            CreateNewSheet = true,
+            DisplayText = "<Crear hoja nueva>"
+        });
+
+        foreach (string worksheetName in selectedWorkbook.WorksheetNames)
+        {
+            sheetComboBox.Items.Add(new SheetSelectionItem
+            {
+                SheetName = worksheetName,
+                CreateNewSheet = false,
+                DisplayText = worksheetName
+            });
+        }
+
+        if (sheetComboBox.Items.Count > 0)
+        {
+            sheetComboBox.SelectedIndex = 0;
+        }
+    }
+
+    private void UpdateOpenWorkbookControls()
+    {
+        bool useOpenWorkbook = useOpenWorkbookCheckBox.Checked;
+        bool hasWorkbookSelection = useOpenWorkbook && workbookComboBox.Items.Count > 0;
+
+        workbookLabel.Enabled = useOpenWorkbook;
+        workbookComboBox.Enabled = hasWorkbookSelection;
+        refreshWorkbooksButton.Enabled = useOpenWorkbook;
+        sheetLabel.Enabled = useOpenWorkbook;
+        sheetComboBox.Enabled = hasWorkbookSelection;
+        openWorkbookHintLabel.Enabled = useOpenWorkbook;
     }
 }

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Windows.Forms;
+using System.Collections.Generic;
 using CopyAsInsert.Models;
 // Note: keep logic so the query is executed by Excel via QueryTables
 
@@ -13,14 +14,106 @@ namespace CopyAsInsert.Services;
 /// </summary>
 public class ExcelInteropManager
 {
+    public sealed class OpenWorkbookInfo
+    {
+        public string Name { get; init; } = string.Empty;
+        public string FullName { get; init; } = string.Empty;
+        public List<string> WorksheetNames { get; init; } = new();
+        public string WorkbookKey => string.IsNullOrWhiteSpace(FullName) ? Name : FullName;
+        public string DisplayName => string.IsNullOrWhiteSpace(FullName) ? Name : $"{Name} ({FullName})";
+
+        public override string ToString() => DisplayName;
+    }
+
+    public sealed class ImportTargetOptions
+    {
+        public bool UseOpenWorkbook { get; set; }
+        public string? WorkbookKey { get; set; }
+        public string? WorkbookName { get; set; }
+        public string? WorksheetName { get; set; }
+        public bool CreateNewWorksheet { get; set; }
+    }
+
+    public static List<OpenWorkbookInfo> GetOpenWorkbooks()
+    {
+        object? excelApp = null;
+        object? workbooks = null;
+
+        try
+        {
+            excelApp = TryGetRunningExcelApplication();
+            if (excelApp == null)
+            {
+                Logger.LogDebug("No running Excel instance found while listing open workbooks.");
+                return new List<OpenWorkbookInfo>();
+            }
+
+            workbooks = excelApp.GetType().InvokeMember("Workbooks", BindingFlags.GetProperty, null, excelApp, null);
+            if (workbooks == null)
+            {
+                return new List<OpenWorkbookInfo>();
+            }
+
+            int workbookCount = GetComCount(workbooks);
+            List<OpenWorkbookInfo> openWorkbooks = new();
+
+            for (int index = 1; index <= workbookCount; index++)
+            {
+                object? workbook = null;
+                try
+                {
+                    workbook = workbooks.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, workbooks, new object[] { index });
+                    if (workbook == null)
+                    {
+                        continue;
+                    }
+
+                    string workbookName = GetComStringProperty(workbook, "Name") ?? $"Workbook{index}";
+                    string workbookFullName = GetComStringProperty(workbook, "FullName") ?? workbookName;
+                    List<string> worksheetNames = GetWorksheetNames(workbook);
+
+                    openWorkbooks.Add(new OpenWorkbookInfo
+                    {
+                        Name = workbookName,
+                        FullName = workbookFullName,
+                        WorksheetNames = worksheetNames
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug($"Could not inspect open workbook at index {index}: {ex.Message}");
+                }
+                finally
+                {
+                    SafeReleaseComObject(workbook);
+                }
+            }
+
+            return openWorkbooks;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning($"Could not list open Excel workbooks: {ex.Message}");
+            return new List<OpenWorkbookInfo>();
+        }
+        finally
+        {
+            SafeReleaseComObject(workbooks);
+            SafeReleaseComObject(excelApp);
+        }
+    }
+
     /// <summary>
     /// Abre Excel y crea una query de SQL Server con los parámetros dados
     /// Uses pure reflection to invoke Excel COM methods - NO Office.Interop references
     /// </summary>
-    public static ImportResult InjectQueryIntoExcel(string server, string database, string query)
+    public static ImportResult InjectQueryIntoExcel(string server, string database, string query, ImportTargetOptions? targetOptions = null)
     {
         object? excelApp = null;
         object? workbook = null;
+        bool attachedToRunningExcel = false;
+        bool createdWorkbook = false;
+        bool useOpenWorkbook = targetOptions?.UseOpenWorkbook == true;
 
         try
         {
@@ -35,8 +128,23 @@ public class ExcelInteropManager
             }
             Logger.LogDebug($"Resolved Excel.Application to type '{excelType.FullName}'");
 
-            // Crear instancia de Excel COM object
-            excelApp = Activator.CreateInstance(excelType);
+            if (useOpenWorkbook)
+            {
+                excelApp = TryGetRunningExcelApplication();
+                attachedToRunningExcel = excelApp != null;
+                if (excelApp == null)
+                {
+                    throw new Exception("No hay ninguna instancia de Excel abierta. Desmarca la opción para usar el flujo normal o abre un libro antes de importar.");
+                }
+
+                Logger.LogInfo("Connected to running Excel instance");
+            }
+            else
+            {
+                // Crear instancia de Excel COM object
+                excelApp = Activator.CreateInstance(excelType);
+            }
+
             if (excelApp == null)
             {
                 Logger.LogError("Activator.CreateInstance returned null for Excel.Application");
@@ -57,9 +165,26 @@ public class ExcelInteropManager
             excelApp.GetType().InvokeMember("Visible", BindingFlags.SetProperty, null, excelApp, new object[] { true });
             Logger.LogDebug("Set Excel.Visible = true");
             
-            // Crear workbook nuevo: excelApp.Workbooks.Add()
             object? workbooks = excelApp.GetType().InvokeMember("Workbooks", BindingFlags.GetProperty, null, excelApp, null);
-            workbook = workbooks?.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, workbooks, null);
+            if (useOpenWorkbook)
+            {
+                workbook = FindWorkbook(workbooks, targetOptions);
+                if (workbook == null)
+                {
+                    throw new Exception($"El libro de Excel seleccionado '{targetOptions?.WorkbookName ?? targetOptions?.WorkbookKey ?? "(sin nombre)"}' ya no está abierto.");
+                }
+
+                Logger.LogInfo($"Using open workbook '{GetComStringProperty(workbook, "Name") ?? targetOptions?.WorkbookName ?? "(unknown)"}'");
+            }
+            else
+            {
+                // Crear workbook nuevo: excelApp.Workbooks.Add()
+                workbook = workbooks?.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, workbooks, null);
+                createdWorkbook = workbook != null;
+            }
+
+            SafeReleaseComObject(workbooks);
+
             if (workbook == null)
             {
                 Logger.LogError("Failed to create new workbook via Excel.Workbooks.Add");
@@ -67,18 +192,17 @@ public class ExcelInteropManager
             }
             Logger.LogDebug("Workbook created");
 
-            // Get Sheets[1] (first worksheet)
-            object? sheets = workbook.GetType().InvokeMember("Sheets", BindingFlags.GetProperty, null, workbook, null);
-            object? worksheet = sheets?.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, sheets, new object[] { 1 });
+            object? worksheet = ResolveTargetWorksheet(workbook, targetOptions, useOpenWorkbook);
             if (worksheet == null)
             {
                 throw new Exception("No se pudo obtener worksheet");
             }
 
-            // Get Range["A1"]
-            object? destination = worksheet.GetType().InvokeMember("Range", BindingFlags.GetProperty, null, worksheet,
-                new object[] { "A1" });
-            Logger.LogDebug("Obtained destination Range A1");
+            string worksheetName = GetComStringProperty(worksheet, "Name") ?? "Sheet1";
+            bool appendToExistingSheet = useOpenWorkbook && targetOptions?.CreateNewWorksheet == false;
+
+            object? destination = GetDestinationRange(worksheet, appendToExistingSheet);
+            Logger.LogDebug($"Obtained destination range for worksheet '{worksheetName}'");
 
             // Try to add a Power Query (M) to the workbook's Queries collection so it appears
             // in the Queries pane (Power Query). This keeps the query in Excel instead of
@@ -86,12 +210,13 @@ public class ExcelInteropManager
             // a successful injection (Excel will perform the query when refreshed).
             bool powerQueryAdded = false;
             object? powerQueryTable = null;
+            object? powerQueryTargetSheet = worksheet;
             try
             {
                 object? queries = workbook.GetType().InvokeMember("Queries", BindingFlags.GetProperty, null, workbook, null);
                 if (queries != null)
                 {
-                    string pqName = $"Query_{DateTime.Now:yyyyMMdd_HHmmss}";
+                    string pqName = GetUniqueWorkbookQueryName(workbook, $"Query_{DateTime.Now:yyyyMMdd_HHmmss}");
                     string mEscaped = query?.Replace("\"", "\"\"") ?? string.Empty; // escape quotes for M string
                     string mFormula = $"let\r\n    Source = Sql.Database(\"{server}\", \"{database}\", [Query=\"{mEscaped}\"])\r\nin\r\n    Source";
                     Logger.LogDebug($"Attempting to add Power Query '{pqName}' to workbook.Queries");
@@ -104,24 +229,27 @@ public class ExcelInteropManager
                     // and leave the query in "Connection only" mode.
                     try
                     {
-                        object? newSheet = null;
-                        try
+                        if (!useOpenWorkbook)
                         {
-                            newSheet = sheets.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, sheets, null);
-                            try { newSheet.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, newSheet, new object[] { pqName }); } catch { }
-                        }
-                        catch (Exception addSheetEx)
-                        {
-                            Logger.LogDebug($"Could not add new sheet for Power Query: {addSheetEx.Message}");
+                            object? dedicatedSheet = null;
+                            try
+                            {
+                                dedicatedSheet = AddWorksheet(workbook, GetUniqueWorksheetName(workbook, pqName));
+                            }
+                            catch (Exception addSheetEx)
+                            {
+                                Logger.LogDebug($"Could not add new sheet for Power Query: {addSheetEx.Message}");
+                            }
+
+                            if (dedicatedSheet != null)
+                            {
+                                powerQueryTargetSheet = dedicatedSheet;
+                                destination = GetDestinationRange(powerQueryTargetSheet, false);
+                            }
                         }
 
-                        object? targetSheet = newSheet ?? worksheet;
-                        object? newDestination = null;
-                        try
-                        {
-                            newDestination = targetSheet.GetType().InvokeMember("Range", BindingFlags.GetProperty, null, targetSheet, new object[] { "A1" });
-                        }
-                        catch { newDestination = destination; }
+                        object? targetSheet = powerQueryTargetSheet ?? worksheet;
+                        object? newDestination = destination;
 
                         object? targetListObjects = null;
                         try
@@ -234,7 +362,7 @@ public class ExcelInteropManager
                                     string connectionString = $"OLEDB;Provider={prov};Server={server};Database={database};Integrated Security=SSPI;Persist Security Info=False;";
                                     Logger.LogDebug($"Provider fallback connection string: {connectionString}");
                                     object? provQtbl = targetQTables.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, targetQTables,
-                                        new object[] { connectionString, newDestination, query });
+                                        new object[] { connectionString, newDestination!, query });
                                     if (provQtbl != null)
                                     {
                                         try { provQtbl.GetType().InvokeMember("FieldNames", BindingFlags.SetProperty, null, provQtbl, new object[] { true }); } catch { }
@@ -284,6 +412,8 @@ public class ExcelInteropManager
                         Logger.LogDebug($"Could not load Power Query into worksheet: {pqLoadEx.Message}");
                     }
                 }
+
+                SafeReleaseComObject(queries);
             }
             catch (TargetInvocationException tie)
             {
@@ -317,7 +447,8 @@ public class ExcelInteropManager
             object? queryTables = null;
             try
             {
-                queryTables = worksheet.GetType().InvokeMember("QueryTables", BindingFlags.GetProperty, null, worksheet, null);
+                object? fallbackWorksheet = powerQueryTargetSheet ?? worksheet;
+                queryTables = fallbackWorksheet?.GetType().InvokeMember("QueryTables", BindingFlags.GetProperty, null, fallbackWorksheet, null);
                 Logger.LogDebug("QueryTables collection obtained from worksheet");
             }
             catch (Exception ex)
@@ -340,12 +471,12 @@ public class ExcelInteropManager
                 try
                 {
                     qt = queryTables.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, queryTables,
-                        new object[] { connectionString, destination, query });
+                        new object[] { connectionString, destination!, query });
 
                     if (qt != null)
                     {
                         Logger.LogInfo($"QueryTable created using provider {prov}");
-                        qt.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, qt, new object[] { $"Query_{DateTime.Now:yyyyMMdd_HHmmss}" });
+                        qt.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, qt, new object[] { GetUniqueWorkbookQueryName(workbook, $"Query_{DateTime.Now:yyyyMMdd_HHmmss}") });
                         qt.GetType().InvokeMember("FieldNames", BindingFlags.SetProperty, null, qt, new object[] { true });
                         qt.GetType().InvokeMember("RowNumbers", BindingFlags.SetProperty, null, qt, new object[] { false });
                         qt.GetType().InvokeMember("FillAdjacentFormulas", BindingFlags.SetProperty, null, qt, new object[] { false });
@@ -456,6 +587,8 @@ public class ExcelInteropManager
             {
                 Logger.LogDebug($"Could not read workbook FullName: {ex.Message}");
             }
+
+            SafeReleaseComObject(worksheet);
             
             return new ImportResult
             {
@@ -477,16 +610,19 @@ public class ExcelInteropManager
             // Cerrar Excel si hubo error
             try
             {
-                if (workbook != null)
+                if (createdWorkbook && workbook != null)
                 {
                     workbook.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, workbook, new object[] { false });
-                    Marshal.ReleaseComObject(workbook);
                 }
-                if (excelApp != null)
+
+                SafeReleaseComObject(workbook);
+
+                if (!attachedToRunningExcel && excelApp != null)
                 {
                     excelApp.GetType().InvokeMember("Quit", BindingFlags.InvokeMethod, null, excelApp, null);
-                    Marshal.ReleaseComObject(excelApp);
                 }
+
+                SafeReleaseComObject(excelApp);
             }
             catch (Exception closeEx)
             {
@@ -502,6 +638,439 @@ public class ExcelInteropManager
                 ServerName = server,
                 DatabaseName = database
             };
+        }
+    }
+
+    private static object? ResolveTargetWorksheet(object workbook, ImportTargetOptions? targetOptions, bool useOpenWorkbook)
+    {
+        if (!useOpenWorkbook)
+        {
+            object? sheets = null;
+            try
+            {
+                sheets = workbook.GetType().InvokeMember("Sheets", BindingFlags.GetProperty, null, workbook, null);
+                return sheets?.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, sheets, new object[] { 1 });
+            }
+            finally
+            {
+                SafeReleaseComObject(sheets);
+            }
+        }
+
+        if (targetOptions == null)
+        {
+            throw new Exception("No se recibieron opciones de destino para el libro abierto.");
+        }
+
+        if (targetOptions.CreateNewWorksheet)
+        {
+            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, $"Import_{DateTime.Now:yyyyMMdd_HHmmss}"));
+        }
+
+        object? worksheet = FindWorksheetByName(workbook, targetOptions.WorksheetName);
+        if (worksheet == null)
+        {
+            throw new Exception($"La hoja '{targetOptions.WorksheetName ?? "(sin nombre)"}' ya no existe en el libro seleccionado.");
+        }
+
+        return worksheet;
+    }
+
+    private static object? GetDestinationRange(object worksheet, bool appendToExistingSheet)
+    {
+        if (!appendToExistingSheet)
+        {
+            return worksheet.GetType().InvokeMember("Range", BindingFlags.GetProperty, null, worksheet, new object[] { "A1" });
+        }
+
+        try
+        {
+            object? usedRange = worksheet.GetType().InvokeMember("UsedRange", BindingFlags.GetProperty, null, worksheet, null);
+            if (usedRange == null)
+            {
+                return worksheet.GetType().InvokeMember("Range", BindingFlags.GetProperty, null, worksheet, new object[] { "A1" });
+            }
+
+            object? usedValue = usedRange.GetType().InvokeMember("Value2", BindingFlags.GetProperty, null, usedRange, null);
+            int usedRow = GetComIntProperty(usedRange, "Row", 1);
+            int usedRowCount = 0;
+            int usedColumnCount = 0;
+
+            object? rows = null;
+            object? columns = null;
+
+            try
+            {
+                rows = usedRange.GetType().InvokeMember("Rows", BindingFlags.GetProperty, null, usedRange, null);
+                columns = usedRange.GetType().InvokeMember("Columns", BindingFlags.GetProperty, null, usedRange, null);
+                usedRowCount = GetComCount(rows);
+                usedColumnCount = GetComCount(columns);
+            }
+            finally
+            {
+                SafeReleaseComObject(rows);
+                SafeReleaseComObject(columns);
+                SafeReleaseComObject(usedRange);
+            }
+
+            bool sheetLooksEmpty = usedValue == null;
+            if (!sheetLooksEmpty && usedValue is string textValue)
+            {
+                sheetLooksEmpty = string.IsNullOrWhiteSpace(textValue) && usedRowCount <= 1 && usedColumnCount <= 1;
+            }
+
+            if (sheetLooksEmpty)
+            {
+                return worksheet.GetType().InvokeMember("Range", BindingFlags.GetProperty, null, worksheet, new object[] { "A1" });
+            }
+
+            int nextRow = Math.Max(1, usedRow + Math.Max(usedRowCount, 1) + 1);
+            return worksheet.GetType().InvokeMember("Range", BindingFlags.GetProperty, null, worksheet, new object[] { $"A{nextRow}" });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug($"Could not calculate append destination. Falling back to A1: {ex.Message}");
+            return worksheet.GetType().InvokeMember("Range", BindingFlags.GetProperty, null, worksheet, new object[] { "A1" });
+        }
+    }
+
+    private static object? TryGetRunningExcelApplication()
+    {
+        Type? excelType = Type.GetTypeFromProgID("Excel.Application");
+        if (excelType == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            Guid clsid = excelType.GUID;
+            GetActiveObject(ref clsid, IntPtr.Zero, out object runningExcel);
+            return runningExcel;
+        }
+        catch (COMException ex)
+        {
+            Logger.LogDebug($"Excel is not currently running: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static object? FindWorkbook(object? workbooks, ImportTargetOptions? targetOptions)
+    {
+        if (workbooks == null || targetOptions == null)
+        {
+            return null;
+        }
+
+        int workbookCount = GetComCount(workbooks);
+        for (int index = 1; index <= workbookCount; index++)
+        {
+            object? workbook = null;
+            try
+            {
+                workbook = workbooks.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, workbooks, new object[] { index });
+                if (workbook == null)
+                {
+                    continue;
+                }
+
+                string workbookName = GetComStringProperty(workbook, "Name") ?? string.Empty;
+                string workbookFullName = GetComStringProperty(workbook, "FullName") ?? string.Empty;
+
+                if ((!string.IsNullOrWhiteSpace(targetOptions.WorkbookKey) && string.Equals(workbookFullName, targetOptions.WorkbookKey, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrWhiteSpace(targetOptions.WorkbookKey) && string.Equals(workbookName, targetOptions.WorkbookKey, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrWhiteSpace(targetOptions.WorkbookName) && string.Equals(workbookName, targetOptions.WorkbookName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return workbook;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug($"Could not evaluate workbook candidate at index {index}: {ex.Message}");
+            }
+
+            SafeReleaseComObject(workbook);
+        }
+
+        return null;
+    }
+
+    private static object AddWorksheet(object workbook, string baseSheetName)
+    {
+        object? worksheets = null;
+
+        try
+        {
+            worksheets = workbook.GetType().InvokeMember("Worksheets", BindingFlags.GetProperty, null, workbook, null);
+            object? newWorksheet = worksheets?.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, worksheets, null);
+            if (newWorksheet == null)
+            {
+                throw new Exception("Excel no devolvió una nueva hoja al intentar crearla.");
+            }
+
+            string uniqueSheetName = GetUniqueWorksheetName(workbook, baseSheetName);
+            try
+            {
+                newWorksheet.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, newWorksheet, new object[] { uniqueSheetName });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug($"Could not set worksheet name '{uniqueSheetName}': {ex.Message}");
+            }
+
+            return newWorksheet;
+        }
+        finally
+        {
+            SafeReleaseComObject(worksheets);
+        }
+    }
+
+    private static object? FindWorksheetByName(object workbook, string? worksheetName)
+    {
+        if (string.IsNullOrWhiteSpace(worksheetName))
+        {
+            return null;
+        }
+
+        object? worksheets = null;
+
+        try
+        {
+            worksheets = workbook.GetType().InvokeMember("Worksheets", BindingFlags.GetProperty, null, workbook, null);
+            if (worksheets == null)
+            {
+                return null;
+            }
+
+            int worksheetCount = GetComCount(worksheets);
+
+            for (int index = 1; index <= worksheetCount; index++)
+            {
+                object? worksheet = null;
+                try
+                {
+                    worksheet = worksheets.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, worksheets, new object[] { index });
+                    string? currentName = worksheet == null ? null : GetComStringProperty(worksheet, "Name");
+                    if (string.Equals(currentName, worksheetName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return worksheet;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug($"Could not inspect worksheet '{worksheetName}' at index {index}: {ex.Message}");
+                }
+
+                SafeReleaseComObject(worksheet);
+            }
+        }
+        finally
+        {
+            SafeReleaseComObject(worksheets);
+        }
+
+        return null;
+    }
+
+    private static List<string> GetWorksheetNames(object workbook)
+    {
+        List<string> worksheetNames = new();
+        object? worksheets = null;
+
+        try
+        {
+            worksheets = workbook.GetType().InvokeMember("Worksheets", BindingFlags.GetProperty, null, workbook, null);
+            if (worksheets == null)
+            {
+                return worksheetNames;
+            }
+
+            int worksheetCount = GetComCount(worksheets);
+
+            for (int index = 1; index <= worksheetCount; index++)
+            {
+                object? worksheet = null;
+                try
+                {
+                    worksheet = worksheets.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, worksheets, new object[] { index });
+                    string? sheetName = worksheet == null ? null : GetComStringProperty(worksheet, "Name");
+                    if (!string.IsNullOrWhiteSpace(sheetName))
+                    {
+                        worksheetNames.Add(sheetName);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug($"Could not read worksheet name at index {index}: {ex.Message}");
+                }
+                finally
+                {
+                    SafeReleaseComObject(worksheet);
+                }
+            }
+        }
+        finally
+        {
+            SafeReleaseComObject(worksheets);
+        }
+
+        return worksheetNames;
+    }
+
+    private static string GetUniqueWorkbookQueryName(object workbook, string baseName)
+    {
+        object? queries = null;
+        HashSet<string> existingNames = new(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            queries = workbook.GetType().InvokeMember("Queries", BindingFlags.GetProperty, null, workbook, null);
+            if (queries != null)
+            {
+                int queryCount = GetComCount(queries);
+                for (int index = 1; index <= queryCount; index++)
+                {
+                    object? query = null;
+                    try
+                    {
+                        query = queries.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, queries, new object[] { index });
+                        string? queryName = query == null ? null : GetComStringProperty(query, "Name");
+                        if (!string.IsNullOrWhiteSpace(queryName))
+                        {
+                            existingNames.Add(queryName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug($"Could not inspect existing workbook query at index {index}: {ex.Message}");
+                    }
+                    finally
+                    {
+                        SafeReleaseComObject(query);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug($"Could not enumerate workbook queries for uniqueness check: {ex.Message}");
+        }
+        finally
+        {
+            SafeReleaseComObject(queries);
+        }
+
+        return EnsureUniqueName(baseName, existingNames, 255);
+    }
+
+    private static string GetUniqueWorksheetName(object workbook, string baseName)
+    {
+        HashSet<string> existingNames = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string worksheetName in GetWorksheetNames(workbook))
+        {
+            existingNames.Add(worksheetName);
+        }
+
+        string sanitizedBaseName = SanitizeWorksheetName(baseName);
+        return EnsureUniqueName(sanitizedBaseName, existingNames, 31);
+    }
+
+    private static string EnsureUniqueName(string baseName, HashSet<string> existingNames, int maxLength)
+    {
+        string normalizedBaseName = string.IsNullOrWhiteSpace(baseName) ? "Import" : baseName.Trim();
+        if (normalizedBaseName.Length > maxLength)
+        {
+            normalizedBaseName = normalizedBaseName[..maxLength];
+        }
+
+        string candidate = normalizedBaseName;
+        int suffix = 1;
+
+        while (existingNames.Contains(candidate))
+        {
+            string suffixText = $"_{suffix}";
+            int baseLength = Math.Max(1, maxLength - suffixText.Length);
+            string trimmedBase = normalizedBaseName.Length > baseLength ? normalizedBaseName[..baseLength] : normalizedBaseName;
+            candidate = trimmedBase + suffixText;
+            suffix++;
+        }
+
+        return candidate;
+    }
+
+    private static string SanitizeWorksheetName(string sheetName)
+    {
+        char[] invalidChars = ['[', ']', ':', '*', '?', '/', '\\'];
+        string sanitized = sheetName;
+        foreach (char invalidChar in invalidChars)
+        {
+            sanitized = sanitized.Replace(invalidChar, '_');
+        }
+
+        if (sanitized.Length > 31)
+        {
+            sanitized = sanitized[..31];
+        }
+
+        return string.IsNullOrWhiteSpace(sanitized) ? "Import" : sanitized;
+    }
+
+    private static string? GetComStringProperty(object target, string propertyName)
+    {
+        try
+        {
+            object? value = target.GetType().InvokeMember(propertyName, BindingFlags.GetProperty, null, target, null);
+            return value?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int GetComIntProperty(object target, string propertyName, int defaultValue = 0)
+    {
+        try
+        {
+            object? value = target.GetType().InvokeMember(propertyName, BindingFlags.GetProperty, null, target, null);
+            return value is int intValue ? intValue : defaultValue;
+        }
+        catch
+        {
+            return defaultValue;
+        }
+    }
+
+    private static int GetComCount(object? comCollection)
+    {
+        if (comCollection == null)
+        {
+            return 0;
+        }
+
+        try
+        {
+            object? count = comCollection.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, comCollection, null);
+            return count is int intCount ? intCount : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static void SafeReleaseComObject(object? comObject)
+    {
+        try
+        {
+            if (comObject != null && Marshal.IsComObject(comObject))
+            {
+                Marshal.ReleaseComObject(comObject);
+            }
+        }
+        catch
+        {
         }
     }
 
@@ -539,6 +1108,9 @@ public class ExcelInteropManager
 
         return 0;
     }
+
+    [DllImport("oleaut32.dll", PreserveSig = false)]
+    private static extern void GetActiveObject(ref Guid rclsid, IntPtr reserved, [MarshalAs(UnmanagedType.IUnknown)] out object ppunk);
 
     [DllImport("user32.dll")]
     private static extern IntPtr SetForegroundWindow(IntPtr hWnd);
