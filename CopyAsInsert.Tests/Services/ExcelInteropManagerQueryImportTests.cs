@@ -5,7 +5,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace CopyAsInsert.Tests.Services;
 
 [TestClass]
-public class ExcelInteropManagerQueryImportTests
+public class SqlImportQueryPlannerTests
 {
     [TestMethod]
     public void BuildImportQueries_SplitsMultipleTrailingFinalSelects()
@@ -34,7 +34,7 @@ SELECT *
 FROM #LIN
 """;
 
-        var plans = ExcelInteropManager.BuildImportQueries(sql);
+        var plans = SqlImportQueryPlanner.BuildImportQueries(sql);
 
         Assert.AreEqual(2, plans.Count);
         StringAssert.Contains(plans[0].Script, "DROP TABLE IF EXISTS #CAB;");
@@ -61,7 +61,7 @@ SELECT *
 FROM #CAB
 """;
 
-        var plans = ExcelInteropManager.BuildImportQueries(sql);
+        var plans = SqlImportQueryPlanner.BuildImportQueries(sql);
 
         Assert.AreEqual(1, plans.Count);
         Assert.AreEqual(sql.Trim(), plans[0].Script);
@@ -78,7 +78,7 @@ FROM dbo.RealTable
 -- FROM dbo.CommentedTable
 """;
 
-        var plans = ExcelInteropManager.BuildImportQueries(sql);
+        var plans = SqlImportQueryPlanner.BuildImportQueries(sql);
 
         Assert.AreEqual(1, plans.Count);
         Assert.AreEqual(sql.Trim(), plans[0].Script);

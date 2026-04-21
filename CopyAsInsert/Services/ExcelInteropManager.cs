@@ -2,10 +2,8 @@ using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Windows.Forms;
 using System.Collections.Generic;
-using System.Text;
-using System.Text.RegularExpressions;
 using CopyAsInsert.Models;
-// Note: keep logic so the query is executed by Excel via QueryTables
+// Note: keep logic so the query is executed by Excel via Power Query
 
 namespace CopyAsInsert.Services;
 
@@ -35,46 +33,6 @@ public class ExcelInteropManager
         public string? WorksheetName { get; set; }
         public bool CreateNewWorksheet { get; set; }
     }
-
-    internal sealed class QueryImportDefinition
-    {
-        public string Script { get; init; } = string.Empty;
-        public string SuggestedName { get; init; } = "Result";
-    }
-
-    private sealed class SqlStatementBlock
-    {
-        public string Text { get; init; } = string.Empty;
-        public string? LeadingKeyword { get; init; }
-    }
-
-    private static readonly HashSet<string> StatementStartKeywords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "SELECT",
-        "WITH",
-        "INSERT",
-        "UPDATE",
-        "DELETE",
-        "MERGE",
-        "DROP",
-        "CREATE",
-        "ALTER",
-        "DECLARE",
-        "SET",
-        "EXEC",
-        "EXECUTE",
-        "TRUNCATE",
-        "IF",
-        "BEGIN",
-        "END",
-        "PRINT",
-        "RAISERROR",
-        "RETURN"
-    };
-
-    private static readonly Regex SourceNameRegex = new(
-        @"\bFROM\s+(?<source>(?:\[[^\]]+\]|[#@A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[#@A-Za-z0-9_]+))*)",
-        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
     public static List<OpenWorkbookInfo> GetOpenWorkbooks()
     {
@@ -234,7 +192,7 @@ public class ExcelInteropManager
                 throw new Exception("No se pudo crear workbook");
             }
             Logger.LogDebug("Workbook created");
-            List<QueryImportDefinition> queryImports = BuildImportQueries(query);
+            List<QueryImportDefinition> queryImports = SqlImportQueryPlanner.BuildImportQueries(query);
             bool appendToExistingSheet = useOpenWorkbook && targetOptions?.CreateNewWorksheet == false;
             int rowCount = 0;
 
@@ -378,9 +336,10 @@ public class ExcelInteropManager
     {
         object? destination = GetDestinationRange(worksheet, appendToExistingSheet);
         string worksheetName = GetComStringProperty(worksheet, "Name") ?? "Sheet1";
-        string pqName = GetUniqueWorkbookQueryName(workbook, BuildWorkbookQueryBaseName(queryDefinition.SuggestedName));
+        string pqName = GetUniqueWorkbookQueryName(workbook, $"Query_{queryDefinition.SuggestedName}");
         bool powerQueryAdded = false;
         object? powerQueryTable = null;
+        Exception? loadException = null;
 
         Logger.LogDebug($"Obtained destination range for worksheet '{worksheetName}' and query '{pqName}'");
 
@@ -389,258 +348,113 @@ public class ExcelInteropManager
             object? queries = workbook.GetType().InvokeMember("Queries", BindingFlags.GetProperty, null, workbook, null);
             try
             {
-                if (queries != null)
+                if (queries == null)
                 {
-                    string mEscaped = queryDefinition.Script.Replace("\"", "\"\"");
-                    string mFormula = $"let\r\n    Source = Sql.Database(\"{server}\", \"{database}\", [Query=\"{mEscaped}\"])\r\nin\r\n    Source";
-                    Logger.LogDebug($"Attempting to add Power Query '{pqName}' to workbook.Queries");
-                    queries.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, queries, new object[] { pqName, mFormula });
-                    Logger.LogInfo($"Power Query '{pqName}' added to workbook.Queries");
-                    powerQueryAdded = true;
-
-                    try
-                    {
-                        object? targetListObjects = null;
-                        object? createdListObj = null;
-                        object? createdQtbl = null;
-
-                        try
-                        {
-                            try
-                            {
-                                targetListObjects = worksheet.GetType().InvokeMember("ListObjects", BindingFlags.GetProperty, null, worksheet, null);
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.LogDebug($"Could not access ListObjects collection for Power Query load: {ex.Message}");
-                            }
-
-                            if (targetListObjects != null && destination != null)
-                            {
-                                try
-                                {
-                                    string mashupConnection = $"OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location={pqName};Extended Properties=\"\"";
-                                    Logger.LogDebug($"Loading Power Query '{pqName}' into worksheet using Mashup OLE DB connection.");
-                                    createdListObj = targetListObjects.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, targetListObjects,
-                                        new object[] { 0, mashupConnection, true, 0, destination });
-                                }
-                                catch (TargetInvocationException tie)
-                                {
-                                    Exception innerException = tie.InnerException ?? tie;
-                                    Logger.LogWarning($"ListObjects.Add failed for Power Query '{pqName}': {innerException.Message}");
-                                    Logger.LogDebug(innerException.ToString());
-                                }
-                                catch (Exception ex)
-                                {
-                                    Logger.LogDebug($"Could not create ListObject for Power Query load: {ex.Message}");
-                                }
-                            }
-
-                            if (createdListObj != null)
-                            {
-                                try
-                                {
-                                    createdListObj.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, createdListObj, new object[] { $"Table_{pqName}" });
-                                }
-                                catch
-                                {
-                                }
-
-                                try
-                                {
-                                    createdQtbl = createdListObj.GetType().InvokeMember("QueryTable", BindingFlags.GetProperty, null, createdListObj, null);
-                                }
-                                catch (Exception ex)
-                                {
-                                    Logger.LogDebug($"Could not access QueryTable for Power Query ListObject: {ex.Message}");
-                                }
-
-                                if (createdQtbl != null)
-                                {
-                                    ConfigureImportedQueryTable(createdQtbl, $"SELECT * FROM [{pqName}]", false);
-
-                                    try
-                                    {
-                                        createdQtbl.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, createdQtbl, new object[] { false });
-                                        int loadedRowCount = GetImportedRowCount(createdQtbl);
-                                        if (loadedRowCount > 0)
-                                        {
-                                            powerQueryTable = createdQtbl;
-                                            Logger.LogInfo($"Power Query '{pqName}' loaded into worksheet with {loadedRowCount} rows.");
-                                        }
-                                        else
-                                        {
-                                            Logger.LogWarning($"Power Query '{pqName}' refresh completed but no rows were materialized in the worksheet.");
-                                        }
-                                    }
-                                    catch (TargetInvocationException tie)
-                                    {
-                                        Exception innerException = tie.InnerException ?? tie;
-                                        Logger.LogWarning($"Refresh failed for Power Query worksheet load: {innerException.Message}");
-                                        Logger.LogDebug(innerException.ToString());
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Logger.LogDebug($"Refresh exception for Power Query worksheet load: {ex.Message}");
-                                    }
-                                }
-                            }
-
-                            if (powerQueryTable == null)
-                            {
-                                TryDeleteListObject(createdListObj, pqName);
-                                powerQueryTable = TryProviderFallbackIntoWorksheet(worksheet, destination, server, database, queryDefinition.Script, pqName);
-                            }
-                        }
-                        finally
-                        {
-                            if (!ReferenceEquals(createdQtbl, powerQueryTable))
-                            {
-                                SafeReleaseComObject(createdQtbl);
-                            }
-
-                            SafeReleaseComObject(createdListObj);
-                            SafeReleaseComObject(targetListObjects);
-                        }
-                    }
-                    catch (Exception pqLoadEx)
-                    {
-                        Logger.LogDebug($"Could not load Power Query into worksheet: {pqLoadEx.Message}");
-                    }
+                    throw new Exception("Excel no expone la colección de Power Query (Queries) en este libro.");
                 }
+
+                string mEscaped = queryDefinition.Script.Replace("\"", "\"\"");
+                string mFormula = $"let\r\n    Source = Sql.Database(\"{server}\", \"{database}\", [Query=\"{mEscaped}\"])\r\nin\r\n    Source";
+                Logger.LogDebug($"Attempting to add Power Query '{pqName}' to workbook.Queries");
+                queries.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, queries, new object[] { pqName, mFormula });
+                Logger.LogInfo($"Power Query '{pqName}' added to workbook.Queries");
+                powerQueryAdded = true;
             }
             finally
             {
                 SafeReleaseComObject(queries);
             }
-        }
-        catch (TargetInvocationException tie)
-        {
-            Exception innerException = tie.InnerException ?? tie;
-            Logger.LogWarning($"Add Power Query failed: {innerException.Message}");
-            Logger.LogDebug(innerException.ToString());
 
-            try
-            {
-                string message = (innerException.Message ?? string.Empty).ToLowerInvariant();
-                if (message.Contains("evaluate") && message.Contains("native") || message.Contains("native database") || message.Contains("evaluatenativequeryunpermitted") || message.Contains("permission is required to run this native"))
-                {
-                    Logger.LogWarning("Power Query blocked native query execution (EvaluateNativeQuery). Prompting user to allow native queries in Power Query settings.");
-                    string helpMsg = "Power Query está bloqueando la ejecución de consultas SQL nativas.\n\n" +
-                        "Para permitir la ejecución de esta consulta, abra el Power Query Editor (Datos -> Obtener y transformar -> Launch Power Query Editor).\n" +
-                        "En el editor, haga clic en 'Edit Permissions' en la banda amarilla o vaya a File -> Options and settings -> Query Options -> Security y habilite 'Allow native database queries' para esta fuente.\n\n" +
-                        "Alternativamente, en Excel vaya a Data -> Get Data -> Data Source Settings -> Edit Permissions y permita la consulta para la fuente.\n\n" +
-                        "Después de dar permiso, vuelva a ejecutar la importación.";
-                    try { MessageBox.Show(helpMsg, "Permiso requerido para consulta nativa", MessageBoxButtons.OK, MessageBoxIcon.Warning); } catch { }
-                }
-            }
-            catch
-            {
-            }
-        }
-        catch (Exception pqEx)
-        {
-            Logger.LogDebug($"Could not add Power Query: {pqEx.Message}");
-        }
-
-        object? queryTables = null;
-        object? qt = powerQueryTable;
-        Exception? providerException = null;
-
-        try
-        {
-            queryTables = worksheet.GetType().InvokeMember("QueryTables", BindingFlags.GetProperty, null, worksheet, null);
-            Logger.LogDebug("QueryTables collection obtained from worksheet");
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning($"QueryTables not available: {ex.Message}");
-            Logger.LogDebug(ex.ToString());
-            queryTables = null;
-        }
-
-        if (queryTables != null && qt == null)
-        {
-            string prov = "MSOLEDBSQL";
-            string connectionString = $"OLEDB;Provider={prov};Server={server};Database={database};Integrated Security=SSPI;Persist Security Info=False;";
-            Logger.LogDebug($"Using SQL Server OLE DB provider: {prov}");
-            Logger.LogDebug($"Connection string: {connectionString}");
-
-            try
-            {
-                qt = queryTables.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, queryTables,
-                    new object[] { connectionString, destination!, queryDefinition.Script });
-
-                if (qt != null)
-                {
-                    Logger.LogInfo($"QueryTable created using provider {prov}");
-                    qt.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, qt, new object[] { pqName });
-                    ConfigureImportedQueryTable(qt, null, true);
-
-                    try
-                    {
-                        qt.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, qt, new object[] { false });
-                        Logger.LogDebug("QueryTable.Refresh() invoked");
-                    }
-                    catch (TargetInvocationException tie)
-                    {
-                        Exception innerException = tie.InnerException ?? tie;
-                        Logger.LogWarning($"Refresh failed for provider {prov}: {innerException.Message}");
-                        Logger.LogDebug(innerException.ToString());
-                    }
-                }
-            }
-            catch (TargetInvocationException tie)
-            {
-                providerException = tie.InnerException ?? tie;
-                Logger.LogError($"Provider {prov} Add() failed: {providerException.Message}");
-                Logger.LogDebug(providerException.ToString());
-            }
-            catch (Exception ex)
-            {
-                providerException = ex;
-                Logger.LogError($"Provider {prov} test failed: {ex.Message}");
-                Logger.LogDebug(ex.ToString());
-            }
-
-            if (qt == null)
-            {
-                Logger.LogError($"Failed to create QueryTable using provider {prov}. Ensure the Microsoft OLE DB Driver for SQL Server (MSOLEDBSQL) is installed and available on this machine.");
-            }
-        }
-
-        if (powerQueryAdded && qt == null)
-        {
-            Logger.LogWarning("Power Query was added to the workbook, but no rows were loaded into a worksheet.");
-        }
-
-        if (qt == null)
-        {
-            Logger.LogError("QueryTable.Add failed using MSOLEDBSQL provider.");
-            if (providerException != null)
-            {
-                Logger.LogError(providerException.ToString());
-            }
-
-            throw new Exception("QueryTable.Add failed with MSOLEDBSQL. Ensure the Microsoft OLE DB Driver for SQL Server is installed. See application log for details.");
-        }
-
-        try
-        {
-            int rowCount = GetImportedRowCount(qt);
+            powerQueryTable = LoadPowerQueryIntoWorksheet(worksheet, destination, pqName);
+            int rowCount = GetImportedRowCount(powerQueryTable);
+            Logger.LogInfo($"Power Query '{pqName}' loaded into worksheet with {rowCount} rows.");
             Logger.LogDebug($"ResultRange rows detected: {rowCount}");
             return rowCount;
         }
+        catch (TargetInvocationException tie)
+        {
+            loadException = tie.InnerException ?? tie;
+            Logger.LogWarning($"Power Query failed: {loadException.Message}");
+            Logger.LogDebug(loadException.ToString());
+            TryPromptForNativeQueryPermission(loadException);
+        }
+        catch (Exception pqEx)
+        {
+            loadException = pqEx;
+            Logger.LogDebug($"Could not complete Power Query import: {pqEx.Message}");
+        }
         finally
         {
-            if (!ReferenceEquals(qt, powerQueryTable))
+            SafeReleaseComObject(powerQueryTable);
+            SafeReleaseComObject(destination);
+        }
+
+        if (!powerQueryAdded)
+        {
+            throw CreatePowerQueryLoadException("No se pudo crear la Power Query en Excel.", loadException);
+        }
+
+        throw CreatePowerQueryLoadException("La Power Query se creó pero no se pudo cargar como tabla en la hoja seleccionada.", loadException);
+    }
+
+    private static object LoadPowerQueryIntoWorksheet(object worksheet, object? destination, string pqName)
+    {
+        object? targetListObjects = null;
+        object? createdListObj = null;
+        object? createdQtbl = null;
+
+        try
+        {
+            targetListObjects = worksheet.GetType().InvokeMember("ListObjects", BindingFlags.GetProperty, null, worksheet, null);
+            if (targetListObjects == null)
             {
-                SafeReleaseComObject(qt);
+                throw new Exception("No se pudo acceder a la colección de tablas (ListObjects) de la hoja de Excel.");
             }
 
-            SafeReleaseComObject(powerQueryTable);
-            SafeReleaseComObject(queryTables);
-            SafeReleaseComObject(destination);
+            if (destination == null)
+            {
+                throw new Exception("No se pudo calcular la celda de destino para cargar la Power Query.");
+            }
+
+            string mashupConnection = $"OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location={pqName};Extended Properties=\"\"";
+            Logger.LogDebug($"Loading Power Query '{pqName}' into worksheet using Excel Mashup connection.");
+            createdListObj = targetListObjects.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, targetListObjects,
+                new object[] { 0, mashupConnection, true, 0, destination });
+
+            if (createdListObj == null)
+            {
+                throw new Exception("Excel no devolvió la tabla (ListObject) al intentar cargar la Power Query.");
+            }
+
+            try
+            {
+                createdListObj.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, createdListObj, new object[] { $"Table_{pqName}" });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug($"Could not set ListObject name for Power Query '{pqName}': {ex.Message}");
+            }
+
+            createdQtbl = createdListObj.GetType().InvokeMember("QueryTable", BindingFlags.GetProperty, null, createdListObj, null);
+            if (createdQtbl == null)
+            {
+                throw new Exception("Excel no devolvió el QueryTable asociado a la Power Query cargada.");
+            }
+
+            ConfigurePowerQueryTable(createdQtbl, $"SELECT * FROM [{pqName}]");
+            createdQtbl.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, createdQtbl, new object[] { false });
+            return createdQtbl;
+        }
+        catch
+        {
+            TryDeleteListObject(createdListObj, pqName);
+            SafeReleaseComObject(createdQtbl);
+            throw;
+        }
+        finally
+        {
+            SafeReleaseComObject(createdListObj);
+            SafeReleaseComObject(targetListObjects);
         }
     }
 
@@ -654,7 +468,7 @@ public class ExcelInteropManager
     {
         if (useOpenWorkbook)
         {
-            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, BuildWorksheetBaseName(queryDefinition.SuggestedName, queryIndex + 1)));
+            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
         }
 
         if (queryIndex == 0)
@@ -662,13 +476,13 @@ public class ExcelInteropManager
             object? firstWorksheet = GetFirstWorksheet(workbook);
             if (firstWorksheet != null && totalQueries > 1)
             {
-                TryRenameWorksheet(firstWorksheet, GetUniqueWorksheetName(workbook, BuildWorksheetBaseName(queryDefinition.SuggestedName, queryIndex + 1)));
+                TryRenameWorksheet(firstWorksheet, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
             }
 
             return firstWorksheet;
         }
 
-        return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, BuildWorksheetBaseName(queryDefinition.SuggestedName, queryIndex + 1)));
+        return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
     }
 
     private static object? GetFirstWorksheet(object workbook)
@@ -697,18 +511,10 @@ public class ExcelInteropManager
         }
     }
 
-    private static void ConfigureImportedQueryTable(object queryTable, string? commandText, bool setFieldNames)
+    private static void ConfigurePowerQueryTable(object queryTable, string commandText)
     {
         try { queryTable.GetType().InvokeMember("CommandType", BindingFlags.SetProperty, null, queryTable, new object[] { 2 }); } catch { }
-        if (!string.IsNullOrWhiteSpace(commandText))
-        {
-            try { queryTable.GetType().InvokeMember("CommandText", BindingFlags.SetProperty, null, queryTable, new object[] { new string[] { commandText } }); } catch (Exception ex) { Logger.LogDebug($"Could not set CommandText for query table load: {ex.Message}"); }
-        }
-
-        if (setFieldNames)
-        {
-            try { queryTable.GetType().InvokeMember("FieldNames", BindingFlags.SetProperty, null, queryTable, new object[] { true }); } catch { }
-        }
+        try { queryTable.GetType().InvokeMember("CommandText", BindingFlags.SetProperty, null, queryTable, new object[] { new string[] { commandText } }); } catch (Exception ex) { Logger.LogDebug($"Could not set CommandText for query table load: {ex.Message}"); }
 
         try { queryTable.GetType().InvokeMember("RowNumbers", BindingFlags.SetProperty, null, queryTable, new object[] { false }); } catch { }
         try { queryTable.GetType().InvokeMember("FillAdjacentFormulas", BindingFlags.SetProperty, null, queryTable, new object[] { false }); } catch { }
@@ -728,7 +534,7 @@ public class ExcelInteropManager
             if (listObject != null)
             {
                 listObject.GetType().InvokeMember("Delete", BindingFlags.InvokeMethod, null, listObject, null);
-                Logger.LogDebug($"Deleted empty Power Query table shell for '{pqName}' before fallback.");
+                Logger.LogDebug($"Deleted empty Power Query table shell for '{pqName}'.");
             }
         }
         catch (Exception ex)
@@ -737,588 +543,38 @@ public class ExcelInteropManager
         }
     }
 
-    private static object? TryProviderFallbackIntoWorksheet(
-        object worksheet,
-        object? destination,
-        string server,
-        string database,
-        string query,
-        string pqName)
+    private static void TryPromptForNativeQueryPermission(Exception exception)
     {
         try
         {
-            Logger.LogWarning("Power Query sheet load produced no data; attempting provider fallback on the same sheet using MSOLEDBSQL.");
-            object? targetQTables = null;
+            string message = (exception.Message ?? string.Empty).ToLowerInvariant();
+            bool nativeQueryBlocked =
+                (message.Contains("evaluate") && message.Contains("native")) ||
+                message.Contains("native database") ||
+                message.Contains("evaluatenativequeryunpermitted") ||
+                message.Contains("permission is required to run this native");
 
-            try
+            if (nativeQueryBlocked)
             {
-                targetQTables = worksheet.GetType().InvokeMember("QueryTables", BindingFlags.GetProperty, null, worksheet, null);
-                if (targetQTables != null && destination != null)
-                {
-                    string prov = "MSOLEDBSQL";
-                    string connectionString = $"OLEDB;Provider={prov};Server={server};Database={database};Integrated Security=SSPI;Persist Security Info=False;";
-                    Logger.LogDebug($"Provider fallback connection string: {connectionString}");
-                    object? provQtbl = targetQTables.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, targetQTables,
-                        new object[] { connectionString, destination, query });
-
-                    if (provQtbl != null)
-                    {
-                        ConfigureImportedQueryTable(provQtbl, null, true);
-
-                        try
-                        {
-                            provQtbl.GetType().InvokeMember("Refresh", BindingFlags.InvokeMethod, null, provQtbl, new object[] { false });
-                            int loadedRowCount = GetImportedRowCount(provQtbl);
-                            if (loadedRowCount > 0)
-                            {
-                                Logger.LogInfo($"Provider fallback loaded {loadedRowCount} rows into worksheet for '{pqName}'.");
-                                return provQtbl;
-                            }
-
-                            Logger.LogWarning($"Provider fallback refresh completed but still produced no rows for '{pqName}'.");
-                        }
-                        catch (TargetInvocationException tie)
-                        {
-                            Exception innerException = tie.InnerException ?? tie;
-                            Logger.LogWarning($"Provider fallback refresh failed: {innerException.Message}");
-                            Logger.LogDebug(innerException.ToString());
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogDebug($"Provider fallback refresh exception: {ex.Message}");
-                        }
-
-                        SafeReleaseComObject(provQtbl);
-                    }
-                }
-            }
-            finally
-            {
-                SafeReleaseComObject(targetQTables);
+                Logger.LogWarning("Power Query blocked native query execution (EvaluateNativeQuery). Prompting user to allow native queries in Power Query settings.");
+                string helpMsg = "Power Query está bloqueando la ejecución de consultas SQL nativas.\n\n" +
+                    "Para permitir la ejecución de esta consulta, abra el Power Query Editor (Datos -> Obtener y transformar -> Launch Power Query Editor).\n" +
+                    "En el editor, haga clic en 'Edit Permissions' en la banda amarilla o vaya a File -> Options and settings -> Query Options -> Security y habilite 'Allow native database queries' para esta fuente.\n\n" +
+                    "Alternativamente, en Excel vaya a Data -> Get Data -> Data Source Settings -> Edit Permissions y permita la consulta para la fuente.\n\n" +
+                    "Después de dar permiso, vuelva a ejecutar la importación.";
+                try { MessageBox.Show(helpMsg, "Permiso requerido para consulta nativa", MessageBoxButtons.OK, MessageBoxIcon.Warning); } catch { }
             }
         }
-        catch (Exception ex)
+        catch
         {
-            Logger.LogDebug($"Provider fallback exception on Power Query sheet: {ex.Message}");
-        }
-
-        return null;
-    }
-
-    internal static List<QueryImportDefinition> BuildImportQueries(string script)
-    {
-        string normalizedScript = script?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(normalizedScript))
-        {
-            return new List<QueryImportDefinition>
-            {
-                new() { Script = string.Empty, SuggestedName = "Result_1" }
-            };
-        }
-
-        List<SqlStatementBlock> statements = SplitTopLevelStatements(normalizedScript);
-        if (statements.Count == 0)
-        {
-            return new List<QueryImportDefinition>
-            {
-                new() { Script = normalizedScript, SuggestedName = GetSuggestedQueryName(normalizedScript, 1) }
-            };
-        }
-
-        int firstResultIndex = statements.Count;
-        for (int index = statements.Count - 1; index >= 0; index--)
-        {
-            if (IsExportResultStatement(statements[index].Text))
-            {
-                firstResultIndex = index;
-                continue;
-            }
-
-            break;
-        }
-
-        int trailingResultCount = statements.Count - firstResultIndex;
-        if (trailingResultCount <= 1)
-        {
-            return new List<QueryImportDefinition>
-            {
-                new() { Script = normalizedScript, SuggestedName = GetSuggestedQueryName(normalizedScript, 1) }
-            };
-        }
-
-        string prefix = string.Join(
-            Environment.NewLine + Environment.NewLine,
-            statements.Take(firstResultIndex).Select(statement => statement.Text.Trim()).Where(statement => !string.IsNullOrWhiteSpace(statement)));
-
-        List<QueryImportDefinition> results = new();
-        for (int index = firstResultIndex; index < statements.Count; index++)
-        {
-            string resultStatement = statements[index].Text.Trim();
-            string importScript = string.IsNullOrWhiteSpace(prefix)
-                ? resultStatement
-                : $"{prefix}{Environment.NewLine}{Environment.NewLine}{resultStatement}";
-
-            results.Add(new QueryImportDefinition
-            {
-                Script = importScript,
-                SuggestedName = GetSuggestedQueryName(resultStatement, results.Count + 1)
-            });
-        }
-
-        return results;
-    }
-
-    private static List<SqlStatementBlock> SplitTopLevelStatements(string script)
-    {
-        List<SqlStatementBlock> statements = new();
-        if (string.IsNullOrWhiteSpace(script))
-        {
-            return statements;
-        }
-
-        string normalizedScript = script.Replace("\r\n", "\n");
-        using StringReader reader = new(normalizedScript);
-        StringBuilder currentStatement = new();
-        string? currentStatementKeyword = null;
-        string? lastTopLevelKeyword = null;
-        int parenthesisDepth = 0;
-        bool inBlockComment = false;
-        bool inStringLiteral = false;
-        bool inBracketIdentifier = false;
-
-        while (reader.ReadLine() is string line)
-        {
-            string? lineKeyword = GetLineLeadingKeyword(line, inBlockComment, inStringLiteral, inBracketIdentifier, parenthesisDepth);
-
-            if (lineKeyword != null && ShouldStartNewStatement(lineKeyword, currentStatementKeyword, lastTopLevelKeyword, currentStatement.Length > 0))
-            {
-                AppendStatementBlock(statements, currentStatement, currentStatementKeyword);
-                currentStatement.Clear();
-                currentStatementKeyword = lineKeyword;
-                lastTopLevelKeyword = lineKeyword;
-            }
-            else if (currentStatement.Length == 0 && lineKeyword != null)
-            {
-                currentStatementKeyword = lineKeyword;
-                lastTopLevelKeyword = lineKeyword;
-            }
-
-            if (currentStatement.Length > 0 || !string.IsNullOrWhiteSpace(line))
-            {
-                currentStatement.AppendLine(line);
-            }
-
-            UpdateSqlParserState(line + "\n", ref parenthesisDepth, ref inBlockComment, ref inStringLiteral, ref inBracketIdentifier, ref lastTopLevelKeyword);
-        }
-
-        AppendStatementBlock(statements, currentStatement, currentStatementKeyword);
-        return statements;
-    }
-
-    private static void AppendStatementBlock(List<SqlStatementBlock> statements, StringBuilder currentStatement, string? currentStatementKeyword)
-    {
-        string statementText = currentStatement.ToString().Trim();
-        if (string.IsNullOrWhiteSpace(statementText))
-        {
-            return;
-        }
-
-        string? leadingKeyword = currentStatementKeyword ?? GetStatementCommandKind(statementText);
-        if (leadingKeyword == null)
-        {
-            return;
-        }
-
-        statements.Add(new SqlStatementBlock
-        {
-            Text = statementText,
-            LeadingKeyword = leadingKeyword
-        });
-    }
-
-    private static string? GetLineLeadingKeyword(string line, bool inBlockComment, bool inStringLiteral, bool inBracketIdentifier, int parenthesisDepth)
-    {
-        if (inBlockComment || inStringLiteral || inBracketIdentifier || parenthesisDepth != 0)
-        {
-            return null;
-        }
-
-        int index = 0;
-        while (index < line.Length && char.IsWhiteSpace(line[index]))
-        {
-            index++;
-        }
-
-        if (index >= line.Length || (line[index] == '-' && index + 1 < line.Length && line[index + 1] == '-') || (line[index] == '/' && index + 1 < line.Length && line[index + 1] == '*'))
-        {
-            return null;
-        }
-
-        if (!char.IsLetter(line[index]))
-        {
-            return null;
-        }
-
-        int start = index;
-        while (index < line.Length && (char.IsLetter(line[index]) || line[index] == '_'))
-        {
-            index++;
-        }
-
-        string keyword = line[start..index].ToUpperInvariant();
-        return IsStatementStartKeyword(keyword) ? keyword : null;
-    }
-
-    private static bool ShouldStartNewStatement(string lineKeyword, string? currentStatementKeyword, string? lastTopLevelKeyword, bool hasCurrentStatement)
-    {
-        if (!hasCurrentStatement)
-        {
-            return true;
-        }
-
-        if (!IsStatementStartKeyword(lineKeyword))
-        {
-            return false;
-        }
-
-        if (string.Equals(lineKeyword, "SELECT", StringComparison.OrdinalIgnoreCase))
-        {
-            if (string.Equals(currentStatementKeyword, "INSERT", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(currentStatementKeyword, "WITH", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(currentStatementKeyword, "CREATE", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(currentStatementKeyword, "ALTER", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(lastTopLevelKeyword, "UNION", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(lastTopLevelKeyword, "ALL", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(lastTopLevelKeyword, "EXCEPT", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(lastTopLevelKeyword, "INTERSECT", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(lastTopLevelKeyword, "AS", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool IsStatementStartKeyword(string keyword)
-    {
-        return StatementStartKeywords.Contains(keyword);
-    }
-
-    private static void UpdateSqlParserState(
-        string sqlFragment,
-        ref int parenthesisDepth,
-        ref bool inBlockComment,
-        ref bool inStringLiteral,
-        ref bool inBracketIdentifier,
-        ref string? lastTopLevelKeyword)
-    {
-        bool inLineComment = false;
-
-        for (int index = 0; index < sqlFragment.Length; index++)
-        {
-            char current = sqlFragment[index];
-            char next = index + 1 < sqlFragment.Length ? sqlFragment[index + 1] : '\0';
-
-            if (inLineComment)
-            {
-                if (current == '\n')
-                {
-                    inLineComment = false;
-                }
-
-                continue;
-            }
-
-            if (inBlockComment)
-            {
-                if (current == '*' && next == '/')
-                {
-                    inBlockComment = false;
-                    index++;
-                }
-
-                continue;
-            }
-
-            if (inStringLiteral)
-            {
-                if (current == '\'' && next == '\'')
-                {
-                    index++;
-                    continue;
-                }
-
-                if (current == '\'')
-                {
-                    inStringLiteral = false;
-                }
-
-                continue;
-            }
-
-            if (inBracketIdentifier)
-            {
-                if (current == ']')
-                {
-                    inBracketIdentifier = false;
-                }
-
-                continue;
-            }
-
-            if (current == '-' && next == '-')
-            {
-                inLineComment = true;
-                index++;
-                continue;
-            }
-
-            if (current == '/' && next == '*')
-            {
-                inBlockComment = true;
-                index++;
-                continue;
-            }
-
-            if (current == '\'')
-            {
-                inStringLiteral = true;
-                continue;
-            }
-
-            if (current == '[')
-            {
-                inBracketIdentifier = true;
-                continue;
-            }
-
-            if (current == '(')
-            {
-                parenthesisDepth++;
-                continue;
-            }
-
-            if (current == ')')
-            {
-                parenthesisDepth = Math.Max(0, parenthesisDepth - 1);
-                continue;
-            }
-
-            if (parenthesisDepth == 0 && char.IsLetter(current))
-            {
-                int start = index;
-                while (index + 1 < sqlFragment.Length && (char.IsLetter(sqlFragment[index + 1]) || sqlFragment[index + 1] == '_'))
-                {
-                    index++;
-                }
-
-                lastTopLevelKeyword = sqlFragment[start..(index + 1)].ToUpperInvariant();
-            }
         }
     }
 
-    private static string? GetStatementCommandKind(string statement)
+    private static Exception CreatePowerQueryLoadException(string message, Exception? innerException)
     {
-        List<string> topLevelTokens = GetTopLevelTokens(statement);
-        if (topLevelTokens.Count == 0)
-        {
-            return null;
-        }
-
-        if (!string.Equals(topLevelTokens[0], "WITH", StringComparison.OrdinalIgnoreCase))
-        {
-            return topLevelTokens[0];
-        }
-
-        foreach (string token in topLevelTokens)
-        {
-            if (string.Equals(token, "SELECT", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(token, "INSERT", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(token, "DELETE", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase))
-            {
-                return token;
-            }
-        }
-
-        return topLevelTokens[0];
-    }
-
-    private static List<string> GetTopLevelTokens(string sql)
-    {
-        List<string> tokens = new();
-        int parenthesisDepth = 0;
-        bool inBlockComment = false;
-        bool inLineComment = false;
-        bool inStringLiteral = false;
-        bool inBracketIdentifier = false;
-
-        for (int index = 0; index < sql.Length; index++)
-        {
-            char current = sql[index];
-            char next = index + 1 < sql.Length ? sql[index + 1] : '\0';
-
-            if (inLineComment)
-            {
-                if (current == '\n')
-                {
-                    inLineComment = false;
-                }
-
-                continue;
-            }
-
-            if (inBlockComment)
-            {
-                if (current == '*' && next == '/')
-                {
-                    inBlockComment = false;
-                    index++;
-                }
-
-                continue;
-            }
-
-            if (inStringLiteral)
-            {
-                if (current == '\'' && next == '\'')
-                {
-                    index++;
-                    continue;
-                }
-
-                if (current == '\'')
-                {
-                    inStringLiteral = false;
-                }
-
-                continue;
-            }
-
-            if (inBracketIdentifier)
-            {
-                if (current == ']')
-                {
-                    inBracketIdentifier = false;
-                }
-
-                continue;
-            }
-
-            if (current == '-' && next == '-')
-            {
-                inLineComment = true;
-                index++;
-                continue;
-            }
-
-            if (current == '/' && next == '*')
-            {
-                inBlockComment = true;
-                index++;
-                continue;
-            }
-
-            if (current == '\'')
-            {
-                inStringLiteral = true;
-                continue;
-            }
-
-            if (current == '[')
-            {
-                inBracketIdentifier = true;
-                continue;
-            }
-
-            if (current == '(')
-            {
-                parenthesisDepth++;
-                continue;
-            }
-
-            if (current == ')')
-            {
-                parenthesisDepth = Math.Max(0, parenthesisDepth - 1);
-                continue;
-            }
-
-            if (parenthesisDepth == 0 && char.IsLetter(current))
-            {
-                int start = index;
-                while (index + 1 < sql.Length && (char.IsLetter(sql[index + 1]) || sql[index + 1] == '_'))
-                {
-                    index++;
-                }
-
-                tokens.Add(sql[start..(index + 1)].ToUpperInvariant());
-            }
-        }
-
-        return tokens;
-    }
-
-    private static bool IsExportResultStatement(string statement)
-    {
-        string? commandKind = GetStatementCommandKind(statement);
-        return string.Equals(commandKind, "SELECT", StringComparison.OrdinalIgnoreCase)
-            && !GetTopLevelTokens(statement).Contains("INTO", StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static string GetSuggestedQueryName(string statement, int ordinal)
-    {
-        Match match = SourceNameRegex.Match(statement);
-        if (match.Success)
-        {
-            string rawSource = match.Groups["source"].Value;
-            string[] parts = rawSource.Split('.', StringSplitOptions.RemoveEmptyEntries);
-            string leafName = parts.Length == 0 ? rawSource : parts[^1];
-            leafName = leafName.Trim().Trim('[', ']').TrimStart('#', '@');
-            string sanitized = SanitizeObjectName(leafName);
-            if (!string.IsNullOrWhiteSpace(sanitized))
-            {
-                return sanitized;
-            }
-        }
-
-        return $"Result_{ordinal}";
-    }
-
-    private static string BuildWorkbookQueryBaseName(string suggestedName)
-    {
-        return $"Query_{SanitizeObjectName(suggestedName)}";
-    }
-
-    private static string BuildWorksheetBaseName(string suggestedName, int ordinal)
-    {
-        string sanitized = SanitizeObjectName(suggestedName);
-        return string.IsNullOrWhiteSpace(sanitized) ? $"Result_{ordinal}" : sanitized;
-    }
-
-    private static string SanitizeObjectName(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return "Result";
-        }
-
-        StringBuilder builder = new();
-        foreach (char character in value.Trim())
-        {
-            if (char.IsLetterOrDigit(character) || character == '_')
-            {
-                builder.Append(character);
-            }
-            else if (builder.Length == 0 || builder[^1] != '_')
-            {
-                builder.Append('_');
-            }
-        }
-
-        string sanitized = builder.ToString().Trim('_');
-        return string.IsNullOrWhiteSpace(sanitized) ? "Result" : sanitized;
+        return innerException == null
+            ? new Exception(message)
+            : new Exception($"{message} Detalle: {innerException.Message}", innerException);
     }
 
     private static object? ResolveTargetWorksheet(object workbook, ImportTargetOptions? targetOptions, bool useOpenWorkbook)

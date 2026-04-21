@@ -16,12 +16,15 @@ public class ExcelImportForm : Form
     private ComboBox workbookComboBox = new();
     private ComboBox sheetComboBox = new();
     private Button refreshWorkbooksButton = new();
+    private Button refreshPreviewButton = new();
     private Button importButton = new();
     private Button cancelButton = new();
     private RichTextBox logTextBox = new();
     private Label workbookLabel = new();
     private Label sheetLabel = new();
     private Label openWorkbookHintLabel = new();
+    private Label queryPreviewLabel = new();
+    private ListBox queryPreviewListBox = new();
     private string? clipboardQuery;
     private bool _importRunning = false;
 
@@ -38,12 +41,13 @@ public class ExcelImportForm : Form
     {
         InitializeComponent();
         LoadSettings();
+        this.Shown += ExcelImportForm_Shown;
     }
 
     private void InitializeComponent()
     {
         this.Text = "Import SQL Query to Excel";
-        this.Size = new Size(540, 470);
+        this.Size = new Size(540, 610);
         this.StartPosition = FormStartPosition.CenterScreen;
         this.TopMost = true;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -129,9 +133,29 @@ public class ExcelImportForm : Form
         };
         this.Controls.Add(openWorkbookHintLabel);
 
+        queryPreviewLabel = new Label
+        {
+            Text = "Vista previa de queries: esperando SQL del portapapeles.",
+            Location = new Point(20, 235),
+            Size = new Size(360, 25),
+            AutoSize = false
+        };
+        this.Controls.Add(queryPreviewLabel);
+
+        refreshPreviewButton.Text = "Actualizar SQL";
+        refreshPreviewButton.Location = new Point(390, 232);
+        refreshPreviewButton.Size = new Size(110, 28);
+        refreshPreviewButton.Click += RefreshPreviewButton_Click;
+        this.Controls.Add(refreshPreviewButton);
+
+        queryPreviewListBox.Location = new Point(20, 265);
+        queryPreviewListBox.Size = new Size(480, 95);
+        queryPreviewListBox.IntegralHeight = false;
+        this.Controls.Add(queryPreviewListBox);
+
         // Log text area (replaces progress bar)
-        logTextBox.Location = new Point(20, 240);
-        logTextBox.Size = new Size(480, 150);
+        logTextBox.Location = new Point(20, 375);
+        logTextBox.Size = new Size(480, 130);
         logTextBox.ReadOnly = true;
         logTextBox.Multiline = true;
         logTextBox.ScrollBars = RichTextBoxScrollBars.Vertical;
@@ -140,14 +164,14 @@ public class ExcelImportForm : Form
 
         // Import Button
         importButton.Text = "Import to Excel";
-        importButton.Location = new Point(170, 405);
+        importButton.Location = new Point(170, 520);
         importButton.Size = new Size(120, 30);
         importButton.Click += ImportButton_Click;
         this.Controls.Add(importButton);
 
         // Cancel Button
         cancelButton.Text = "Cancel";
-        cancelButton.Location = new Point(300, 405);
+        cancelButton.Location = new Point(300, 520);
         cancelButton.Size = new Size(100, 30);
         cancelButton.Click += (s, e) => this.Close();
         this.Controls.Add(cancelButton);
@@ -196,6 +220,8 @@ public class ExcelImportForm : Form
                 "No Query", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
+
+        RefreshQueryPreview(clipboardQuery);
 
         string server = serverTextBox.Text.Trim();
         string database = databaseTextBox.Text.Trim();
@@ -391,6 +417,11 @@ public class ExcelImportForm : Form
         RefreshOpenWorkbookOptions();
     }
 
+    private void RefreshPreviewButton_Click(object? sender, EventArgs e)
+    {
+        RefreshQueryPreview();
+    }
+
     private void WorkbookComboBox_SelectedIndexChanged(object? sender, EventArgs e)
     {
         PopulateSheetOptions();
@@ -463,5 +494,37 @@ public class ExcelImportForm : Form
         sheetLabel.Enabled = useOpenWorkbook;
         sheetComboBox.Enabled = hasWorkbookSelection;
         openWorkbookHintLabel.Enabled = useOpenWorkbook;
+    }
+
+    private void ExcelImportForm_Shown(object? sender, EventArgs e)
+    {
+        RefreshQueryPreview();
+    }
+
+    private void RefreshQueryPreview(string? queryText = null)
+    {
+        queryPreviewListBox.Items.Clear();
+
+        clipboardQuery = queryText ?? GetClipboardText();
+        if (string.IsNullOrWhiteSpace(clipboardQuery))
+        {
+            queryPreviewLabel.Text = "Vista previa de queries: no hay SQL en el portapapeles.";
+            queryPreviewListBox.Items.Add("<Portapapeles vacío>");
+            queryPreviewListBox.ClearSelected();
+            return;
+        }
+
+        var queryImports = SqlImportQueryPlanner.BuildImportQueries(clipboardQuery);
+        queryPreviewLabel.Text = queryImports.Count == 1
+            ? "Vista previa de queries: se creará 1 query en Excel."
+            : $"Vista previa de queries: se crearán {queryImports.Count} queries en Excel.";
+
+        for (int index = 0; index < queryImports.Count; index++)
+        {
+            var queryImport = queryImports[index];
+            queryPreviewListBox.Items.Add($"{index + 1}. {queryImport.SuggestedName}");
+        }
+
+        queryPreviewListBox.ClearSelected();
     }
 }
