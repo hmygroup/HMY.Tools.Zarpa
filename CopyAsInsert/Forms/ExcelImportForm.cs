@@ -282,7 +282,9 @@ public class ExcelImportForm : Form
             if (result.Success)
             {
                 SaveSettings();
-                Logger.LogInfo($"Query imported successfully: {result.RowCount} rows");
+                Logger.LogInfo(result.QueryCount > 1
+                    ? $"Imported {result.QueryCount} queries successfully: {result.RowCount} total rows"
+                    : $"Query imported successfully: {result.RowCount} rows");
                 // Clear import-running flag before closing so OnFormClosing doesn't prompt
                 _importRunning = false;
                 this.Close();
