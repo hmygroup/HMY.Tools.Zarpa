@@ -193,6 +193,7 @@ public class ExcelInteropManager
             }
             Logger.LogDebug("Workbook created");
             List<QueryImportDefinition> queryImports = SqlImportQueryPlanner.BuildImportQueries(query);
+            string importNameTimestamp = CreateImportNameTimestamp(DateTime.Now);
             bool appendToExistingSheet = useOpenWorkbook && targetOptions?.CreateNewWorksheet == false;
             int rowCount = 0;
 
@@ -217,7 +218,7 @@ public class ExcelInteropManager
 
                 if (currentWorksheet == null)
                 {
-                    currentWorksheet = ResolveWorksheetForImport(workbook, targetOptions, useOpenWorkbook, queryImport, queryIndex, queryImports.Count);
+                    currentWorksheet = ResolveWorksheetForImport(workbook, targetOptions, useOpenWorkbook, queryImport, queryIndex, queryImports.Count, importNameTimestamp);
                 }
 
                 if (currentWorksheet == null)
@@ -230,7 +231,7 @@ public class ExcelInteropManager
 
                 try
                 {
-                    rowCount += ImportQueryIntoWorksheet(workbook, currentWorksheet, server, database, queryImport, appendToExistingSheet);
+                    rowCount += ImportQueryIntoWorksheet(workbook, currentWorksheet, server, database, queryImport, importNameTimestamp, appendToExistingSheet);
                 }
                 finally
                 {
@@ -332,11 +333,13 @@ public class ExcelInteropManager
         string server,
         string database,
         QueryImportDefinition queryDefinition,
+        string importNameTimestamp,
         bool appendToExistingSheet)
     {
         object? destination = GetDestinationRange(worksheet, appendToExistingSheet);
         string worksheetName = GetComStringProperty(worksheet, "Name") ?? "Sheet1";
-        string pqName = GetUniqueWorkbookQueryName(workbook, $"Query_{queryDefinition.SuggestedName}");
+        string importObjectName = BuildTimestampedImportName(queryDefinition.SuggestedName, importNameTimestamp);
+        string pqName = GetUniqueWorkbookQueryName(workbook, $"Query_{importObjectName}");
         bool powerQueryAdded = false;
         object? powerQueryTable = null;
         Exception? loadException = null;
@@ -464,11 +467,14 @@ public class ExcelInteropManager
         bool useOpenWorkbook,
         QueryImportDefinition queryDefinition,
         int queryIndex,
-        int totalQueries)
+        int totalQueries,
+        string importNameTimestamp)
     {
+        string worksheetBaseName = BuildTimestampedImportName(queryDefinition.SuggestedName, importNameTimestamp);
+
         if (useOpenWorkbook)
         {
-            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
+            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, worksheetBaseName));
         }
 
         if (queryIndex == 0)
@@ -476,13 +482,13 @@ public class ExcelInteropManager
             object? firstWorksheet = GetFirstWorksheet(workbook);
             if (firstWorksheet != null && totalQueries > 1)
             {
-                TryRenameWorksheet(firstWorksheet, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
+                TryRenameWorksheet(firstWorksheet, GetUniqueWorksheetName(workbook, worksheetBaseName));
             }
 
             return firstWorksheet;
         }
 
-        return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, queryDefinition.SuggestedName));
+        return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, worksheetBaseName));
     }
 
     private static object? GetFirstWorksheet(object workbook)
@@ -600,7 +606,8 @@ public class ExcelInteropManager
 
         if (targetOptions.CreateNewWorksheet)
         {
-            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, $"Import_{DateTime.Now:yyyyMMdd_HHmmss}"));
+            string importNameTimestamp = CreateImportNameTimestamp(DateTime.Now);
+            return AddWorksheet(workbook, GetUniqueWorksheetName(workbook, BuildTimestampedImportName("Import", importNameTimestamp)));
         }
 
         object? worksheet = FindWorksheetByName(workbook, targetOptions.WorksheetName);
@@ -898,6 +905,19 @@ public class ExcelInteropManager
         }
 
         return EnsureUniqueName(baseName, existingNames, 255);
+    }
+
+    internal static string CreateImportNameTimestamp(DateTime importTime)
+    {
+        return importTime.ToString("yyyyMMdd_HHmmss");
+    }
+
+    internal static string BuildTimestampedImportName(string? baseName, string importNameTimestamp)
+    {
+        string normalizedBaseName = string.IsNullOrWhiteSpace(baseName) ? "Import" : baseName.Trim();
+        return string.IsNullOrWhiteSpace(importNameTimestamp)
+            ? normalizedBaseName
+            : $"{normalizedBaseName}_{importNameTimestamp}";
     }
 
     private static string GetUniqueWorksheetName(object workbook, string baseName)

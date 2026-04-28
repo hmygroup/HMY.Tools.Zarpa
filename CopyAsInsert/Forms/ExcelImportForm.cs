@@ -10,8 +10,8 @@ namespace CopyAsInsert.Forms;
 
 public class ExcelImportForm : Form
 {
-    private TextBox serverTextBox = new();
-    private TextBox databaseTextBox = new();
+    private ComboBox serverComboBox = new();
+    private ComboBox databaseComboBox = new();
     private CheckBox useOpenWorkbookCheckBox = new();
     private ComboBox workbookComboBox = new();
     private ComboBox sheetComboBox = new();
@@ -54,7 +54,7 @@ public class ExcelImportForm : Form
         this.MaximizeBox = false;
         this.MinimizeBox = false;
 
-        // Server label and textbox
+        // Server label and combo
         Label serverLabel = new()
         {
             Text = "SQL Server:",
@@ -64,12 +64,11 @@ public class ExcelImportForm : Form
         };
         this.Controls.Add(serverLabel);
 
-        serverTextBox.Location = new Point(150, 20);
-        serverTextBox.Size = new Size(300, 25);
-        serverTextBox.Text = "(localhost)";
-        this.Controls.Add(serverTextBox);
+        ConfigureEditableHistoryComboBox(serverComboBox, new Point(150, 20));
+        serverComboBox.Text = "(localhost)";
+        this.Controls.Add(serverComboBox);
 
-        // Database label and textbox
+        // Database label and combo
         Label databaseLabel = new()
         {
             Text = "Database:",
@@ -79,9 +78,8 @@ public class ExcelImportForm : Form
         };
         this.Controls.Add(databaseLabel);
 
-        databaseTextBox.Location = new Point(150, 55);
-        databaseTextBox.Size = new Size(300, 25);
-        this.Controls.Add(databaseTextBox);
+        ConfigureEditableHistoryComboBox(databaseComboBox, new Point(150, 55));
+        this.Controls.Add(databaseComboBox);
 
         useOpenWorkbookCheckBox.Text = "Usar un libro Excel ya abierto";
         useOpenWorkbookCheckBox.Location = new Point(20, 95);
@@ -184,10 +182,9 @@ public class ExcelImportForm : Form
         try
         {
             var settings = SettingsManager.LoadSettings();
-            serverTextBox.Text = string.IsNullOrEmpty(settings.ExcelImportServer) 
-                ? "(localhost)" 
-                : settings.ExcelImportServer;
-            databaseTextBox.Text = settings.ExcelImportDatabase;
+            PopulateRecentValues(serverComboBox, settings.ExcelImportServerHistory,
+                string.IsNullOrEmpty(settings.ExcelImportServer) ? "(localhost)" : settings.ExcelImportServer);
+            PopulateRecentValues(databaseComboBox, settings.ExcelImportDatabaseHistory, settings.ExcelImportDatabase);
         }
         catch (Exception ex)
         {
@@ -200,8 +197,7 @@ public class ExcelImportForm : Form
         try
         {
             var settings = SettingsManager.LoadSettings();
-            settings.ExcelImportServer = serverTextBox.Text;
-            settings.ExcelImportDatabase = databaseTextBox.Text;
+            SettingsManager.UpdateExcelImportRecentValues(settings, serverComboBox.Text, databaseComboBox.Text);
             SettingsManager.SaveSettings(settings);
         }
         catch (Exception ex)
@@ -223,8 +219,8 @@ public class ExcelImportForm : Form
 
         RefreshQueryPreview(clipboardQuery);
 
-        string server = serverTextBox.Text.Trim();
-        string database = databaseTextBox.Text.Trim();
+        string server = serverComboBox.Text.Trim();
+        string database = databaseComboBox.Text.Trim();
         ExcelInteropManager.ImportTargetOptions? targetOptions = null;
 
         if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(database))
@@ -354,6 +350,28 @@ public class ExcelImportForm : Form
             importButton.Enabled = true;
             cancelButton.Enabled = true;
         }
+    }
+
+    private static void ConfigureEditableHistoryComboBox(ComboBox comboBox, Point location)
+    {
+        comboBox.Location = location;
+        comboBox.Size = new Size(300, 25);
+        comboBox.DropDownStyle = ComboBoxStyle.DropDown;
+        comboBox.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+        comboBox.AutoCompleteSource = AutoCompleteSource.ListItems;
+    }
+
+    private static void PopulateRecentValues(ComboBox comboBox, IEnumerable<string> values, string selectedValue)
+    {
+        comboBox.Items.Clear();
+        foreach (string value in values)
+        {
+            comboBox.Items.Add(value);
+        }
+
+        comboBox.Text = selectedValue;
+        comboBox.SelectionStart = comboBox.Text.Length;
+        comboBox.SelectionLength = 0;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
